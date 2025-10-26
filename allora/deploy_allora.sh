@@ -169,13 +169,19 @@ EOF
 setup_wallet() {
     log_step "3. 设置钱包..."
     
-    if [ -f "$WALLET_INFO_FILE" ] && \
-       [ -n "$(grep 'WALLET_ADDRESS' "$WALLET_INFO_FILE")" ] && \
-       [ -n "$(grep 'MNEMONIC' "$WALLET_INFO_FILE")" ]; then
-        
+    # 检查钱包文件是否存在且有有效内容
+    if [ -f "$WALLET_INFO_FILE" ]; then
         source "$WALLET_INFO_FILE"
-        log_info "✅ 使用现有钱包: $WALLET_ADDRESS"
-        return 0
+        
+        # 验证钱包信息是否完整
+        if [[ -n "$WALLET_ADDRESS" ]] && [[ -n "$MNEMONIC" ]] && [[ -n "$WALLET_NAME" ]]; then
+            log_info "✅ 使用现有钱包: $WALLET_ADDRESS"
+            return 0
+        else
+            log_warn "⚠️  检测到钱包文件内容不完整，将重新生成钱包"
+            rm -f "$WALLET_INFO_FILE"
+            generate_wallet
+        fi
     else
         log_info "创建新钱包..."
         generate_wallet
@@ -187,12 +193,24 @@ show_faucet_info() {
     log_step "4. 获取测试代币..."
     
     if [ -f "$WALLET_INFO_FILE" ]; then
+        # 重新加载钱包信息以确保获取最新值
         source "$WALLET_INFO_FILE"
+        
         log_info "💰 请获取测试代币:"
         echo "   水龙头地址: https://faucet.testnet.allora.network"
         echo "   你的钱包地址: $WALLET_ADDRESS"
         echo ""
+        
+        # 验证地址是否有效
+        if [[ -z "$WALLET_ADDRESS" ]]; then
+            log_error "钱包地址为空，请删除 ~/.allora_wallet.info 文件后重新运行"
+            exit 1
+        fi
+        
         read -p "领取后代币后按回车键继续..."
+    else
+        log_error "未找到钱包信息文件"
+        exit 1
     fi
 }
 
