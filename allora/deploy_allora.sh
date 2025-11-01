@@ -384,7 +384,7 @@ services:
       - ./main.py:/app/main.py
     ports:
       - "8000:8000"
-    command: sh -c "pip install --timeout 120 -r requirements.txt && python main.py""
+    command: sh -c "pip install --timeout 120 -r requirements.txt && python main.py"
     networks:
       - allora-network
 
