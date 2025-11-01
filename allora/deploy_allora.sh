@@ -306,9 +306,9 @@ create_inference_service() {
     
     # requirements.txt
     cat > requirements.txt << 'EOF'
-flask==2.3.3
-requests==2.31.0
-numpy==1.24.3
+flask>=2.3.0
+requests>=2.31.0
+numpy>=1.24.3
 EOF
     
     # main.py
@@ -384,7 +384,7 @@ services:
       - ./main.py:/app/main.py
     ports:
       - "8000:8000"
-    command: sh -c "pip install -i https://pypi.tuna.tsinghua.edu.cn/simple -r requirements.txt && python main.py"
+    command: sh -c "pip install --timeout 120 -r requirements.txt && python main.py""
     networks:
       - allora-network
 
