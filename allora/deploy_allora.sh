@@ -62,6 +62,17 @@ check_dependencies() {
         fi
     fi
     
+    if ! command -v wget &> /dev/null; then
+        log_info "安装 wget..."
+        if [[ "$OS_TYPE" == "macos" ]]; then
+            brew install wget
+        elif [[ "$OS_TYPE" == "ubuntu" ]]; then
+            sudo apt update && sudo apt install -y wget
+        fi
+    else
+        log_info "✅ 检测到 wget 已安装，跳过安装"
+    fi
+    
     if ! command -v allorad &> /dev/null; then
         log_info "安装 allorad..."
         curl -sSL https://raw.githubusercontent.com/allora-network/allora-chain/dev/install.sh | bash -s -- v0.12.1
