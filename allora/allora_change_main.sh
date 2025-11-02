@@ -72,8 +72,22 @@ if [ -f "$ROOT_MAIN_GO" ]; then
     fi
 fi
 
+# 也检查 adapters 目录下的其他可能位置
+ADAPTERS_MAIN_GO="$PROJECT_DIR/adapters/main.go"
+if [ -f "$ADAPTERS_MAIN_GO" ]; then
+    if grep -q "^package apiadapter" "$ADAPTERS_MAIN_GO" 2>/dev/null; then
+        log_warn "⚠️  发现 adapters 目录下有错误位置的 main.go，正在删除..."
+        rm -f "$ADAPTERS_MAIN_GO"
+        log_info "✅ 已删除错误位置的 main.go"
+    fi
+fi
+
 # 替换 main.go 文件
 log_step "4. 写入新的 main.go 文件..."
+log_info "目标路径: $MAIN_GO_PATH"
+log_info "确保目录存在: $(dirname "$MAIN_GO_PATH")"
+mkdir -p "$(dirname "$MAIN_GO_PATH")"
+
 cat > "$MAIN_GO_PATH" << 'MAIN_GO_EOF'
 package apiadapter
 
@@ -425,6 +439,27 @@ if ! grep -q "^package apiadapter" "$MAIN_GO_PATH" 2>/dev/null; then
 fi
 log_info "✅ 文件内容验证通过"
 
+# 最终检查：确保根目录下没有 apiadapter 包的 main.go
+log_step "4.5. 最终清理检查..."
+ROOT_CHECK="$PROJECT_DIR/main.go"
+if [ -f "$ROOT_CHECK" ]; then
+    if grep -q "^package apiadapter" "$ROOT_CHECK" 2>/dev/null; then
+        log_warn "⚠️  构建前发现根目录下有 apiadapter 包的 main.go，正在删除..."
+        rm -f "$ROOT_CHECK"
+        log_info "✅ 已删除根目录下的冲突文件"
+    fi
+fi
+
+# 列出所有 main.go 文件位置以便调试
+log_info "检查所有 main.go 文件位置..."
+find "$PROJECT_DIR" -name "main.go" -type f | while read -r file; do
+    if grep -q "^package apiadapter" "$file" 2>/dev/null; then
+        log_info "  ✓ 找到 apiadapter 包文件: $file"
+    else
+        log_info "  - 其他包文件: $file"
+    fi
+done
+
 # 重新构建和启动服务
 log_step "5. 重新构建和启动 Docker 服务..."
 cd "$PROJECT_DIR" || exit 1
@@ -439,6 +474,30 @@ if [ ! -f "Dockerfile.offchain" ]; then
     log_error "❌ Dockerfile.offchain 文件不存在"
     exit 1
 fi
+
+# 构建前最终清理：删除所有可能冲突的 main.go 文件（apiadapter 包在错误位置）
+log_info "构建前最终清理冲突文件..."
+cd "$PROJECT_DIR" || exit 1
+
+# 查找并删除根目录下 apiadapter 包的 main.go
+find . -maxdepth 1 -name "main.go" -type f | while read -r file; do
+    if grep -q "^package apiadapter" "$file" 2>/dev/null; then
+        log_warn "⚠️  删除根目录下的冲突文件: $file"
+        rm -f "$file"
+    fi
+done
+
+# 查找并删除 adapters 目录下（非 apiadapter 子目录）的 main.go
+if [ -d "adapters" ]; then
+    find adapters -maxdepth 1 -name "main.go" -type f | while read -r file; do
+        if grep -q "^package apiadapter" "$file" 2>/dev/null; then
+            log_warn "⚠️  删除 adapters 目录下的冲突文件: $file"
+            rm -f "$file"
+        fi
+    done
+fi
+
+log_info "✅ 清理完成"
 
 # 清理旧的 Docker 镜像（避免缓存问题）
 log_info "清理旧的 Docker 镜像..."
