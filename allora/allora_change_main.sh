@@ -47,16 +47,28 @@ fi
 cd ..
 
 # 备份旧的 main.go
-log_step "3. 备份旧的 main.go..."
+log_step "3. 备份并清理 main.go 文件..."
 # 确保目录存在
 mkdir -p "$(dirname "$MAIN_GO_PATH")"
 
+# 备份正确位置的文件
 if [ -f "$MAIN_GO_PATH" ]; then
     BACKUP_FILE="${MAIN_GO_PATH}.backup.$(date +%Y%m%d_%H%M%S)"
     cp "$MAIN_GO_PATH" "$BACKUP_FILE"
     log_info "✅ 已备份旧文件到: $BACKUP_FILE"
 else
     log_warn "⚠️  旧的 main.go 不存在，将直接创建新文件"
+fi
+
+# 检查并删除根目录下可能存在的错误位置的 main.go（如果包名是 apiadapter）
+ROOT_MAIN_GO="$PROJECT_DIR/main.go"
+if [ -f "$ROOT_MAIN_GO" ]; then
+    # 检查文件内容，如果是 apiadapter 包则删除
+    if grep -q "^package apiadapter" "$ROOT_MAIN_GO" 2>/dev/null; then
+        log_warn "⚠️  发现根目录下有错误位置的 main.go（apiadapter 包），正在删除..."
+        rm -f "$ROOT_MAIN_GO"
+        log_info "✅ 已删除错误位置的 main.go"
+    fi
 fi
 
 # 替换 main.go 文件
