@@ -460,7 +460,7 @@ services:
     volumes:
       - ./config.json:/app/config.json:ro
     ports:
-      - "8082:8080"
+      - "8084:8080"
     networks:
       - allora-network
     restart: unless-stopped
