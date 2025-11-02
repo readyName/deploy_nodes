@@ -18,7 +18,7 @@ log_step() { echo -e "${BLUE}==>${NC} $1"; }
 
 # 常量定义
 PROJECT_DIR="allora-offchain-node"
-MAIN_GO_PATH="$PROJECT_DIR/main.go"
+MAIN_GO_PATH="$PROJECT_DIR/adapters/apiadapter/main.go"
 
 echo "🚀 Allora 替换 main.go 并重启节点..."
 echo "================================================"
@@ -48,6 +48,9 @@ cd ..
 
 # 备份旧的 main.go
 log_step "3. 备份旧的 main.go..."
+# 确保目录存在
+mkdir -p "$(dirname "$MAIN_GO_PATH")"
+
 if [ -f "$MAIN_GO_PATH" ]; then
     BACKUP_FILE="${MAIN_GO_PATH}.backup.$(date +%Y%m%d_%H%M%S)"
     cp "$MAIN_GO_PATH" "$BACKUP_FILE"
