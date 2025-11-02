@@ -36,9 +36,10 @@ log_info "✅ 项目目录存在"
 log_step "2. 停止现有 Docker 服务..."
 cd "$PROJECT_DIR" || exit 1
 
-if docker compose ps | grep -q "allora-offchain-node"; then
+# 停止可能运行的旧服务
+if docker compose ps 2>/dev/null | grep -q "allora-offchain-node"; then
     log_info "正在停止 Allora 节点..."
-    docker compose down
+    docker compose down 2>/dev/null || true
     log_info "✅ 服务已停止"
 else
     log_info "✅ 没有运行中的服务"
@@ -417,6 +418,13 @@ if [ ! -f "$MAIN_GO_PATH" ]; then
     exit 1
 fi
 
+# 验证文件内容
+if ! grep -q "^package apiadapter" "$MAIN_GO_PATH" 2>/dev/null; then
+    log_error "❌ 文件内容验证失败，包名不正确"
+    exit 1
+fi
+log_info "✅ 文件内容验证通过"
+
 # 重新构建和启动服务
 log_step "5. 重新构建和启动 Docker 服务..."
 cd "$PROJECT_DIR" || exit 1
@@ -432,6 +440,11 @@ if [ ! -f "Dockerfile.offchain" ]; then
     exit 1
 fi
 
+# 清理旧的 Docker 镜像（避免缓存问题）
+log_info "清理旧的 Docker 镜像..."
+docker rmi -f $(docker images | grep "allora" | awk '{print $3}') 2>/dev/null || true
+log_info "✅ 镜像清理完成"
+
 log_info "检查 Docker 配置..."
 docker compose config >/dev/null 2>&1 || {
     log_error "❌ Docker 配置检查失败"
@@ -444,6 +457,7 @@ if docker compose build; then
     log_info "✅ 镜像构建成功"
 else
     log_error "❌ 镜像构建失败"
+    docker compose logs --tail=20 2>/dev/null || true
     exit 1
 fi
 
@@ -467,10 +481,20 @@ if docker compose up -d; then
     # 检查服务状态
     if docker ps | grep -q "allora-offchain-node"; then
         log_info "✅ 节点启动成功！"
+        
+        # 显示服务状态
+        echo ""
+        echo "=== 服务状态 ==="
+        docker ps | grep -E "CONTAINER|allora"
+        echo ""
+        
         log_info "查看日志: cd $PROJECT_DIR && docker compose logs -f"
+        log_info "停止服务: cd $PROJECT_DIR && docker compose down"
     else
         log_error "❌ 节点启动失败，请检查日志"
-        docker compose logs --tail=20
+        echo ""
+        echo "=== 错误日志 ==="
+        docker compose logs --tail=30 2>/dev/null || true
         exit 1
     fi
 else
