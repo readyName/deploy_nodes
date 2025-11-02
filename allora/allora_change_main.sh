@@ -17,8 +17,7 @@ log_error() { echo -e "${RED}[ERROR]${NC} $1"; }
 log_step() { echo -e "${BLUE}==>${NC} $1"; }
 
 # 常量定义
-PROJECT_DIR="allora-offchain-node"
-MAIN_GO_PATH="$PROJECT_DIR/adapter/api/apiadapter/main.go"
+PROJECT_DIR_NAME="allora-offchain-node"
 
 # 保存脚本执行时的初始工作目录
 INITIAL_DIR="$(pwd)"
@@ -26,18 +25,52 @@ INITIAL_DIR="$(pwd)"
 echo "🚀 Allora 替换 main.go 并重启节点..."
 echo "================================================"
 
-# 检查项目目录是否存在
-log_step "1. 检查项目目录..."
-if [ ! -d "$PROJECT_DIR" ]; then
-    log_error "❌ 项目目录 $PROJECT_DIR 不存在"
-    log_info "请先运行 deploy_allora.sh 安装 Allora"
-    exit 1
+# 自动检测项目目录位置
+log_step "1. 检测项目目录..."
+CURRENT_DIR_NAME="$(basename "$(pwd)")"
+
+if [ "$CURRENT_DIR_NAME" = "$PROJECT_DIR_NAME" ]; then
+    # 当前目录就是项目目录
+    PROJECT_DIR="."
+    log_info "✅ 检测到当前目录就是项目目录: $(pwd)"
+elif [ -d "$PROJECT_DIR_NAME" ]; then
+    # 项目目录在当前目录的子目录中
+    PROJECT_DIR="$PROJECT_DIR_NAME"
+    log_info "✅ 检测到项目目录: $PROJECT_DIR"
+else
+    # 尝试查找项目目录
+    FOUND_DIR=$(find . -maxdepth 2 -type d -name "$PROJECT_DIR_NAME" 2>/dev/null | head -n 1)
+    if [ -n "$FOUND_DIR" ]; then
+        PROJECT_DIR="$FOUND_DIR"
+        log_info "✅ 找到项目目录: $PROJECT_DIR"
+    else
+        log_error "❌ 无法找到项目目录 $PROJECT_DIR_NAME"
+        log_info "当前目录: $(pwd)"
+        log_info "请确保："
+        log_info "  1. 在项目目录 ($PROJECT_DIR_NAME) 内执行此脚本，或"
+        log_info "  2. 在包含项目目录的父目录中执行此脚本"
+        exit 1
+    fi
 fi
-log_info "✅ 项目目录存在"
+
+# 获取项目目录的绝对路径
+if [ "$PROJECT_DIR" = "." ]; then
+    # 如果 PROJECT_DIR 是 "."，表示当前目录就是项目目录
+    PROJECT_DIR_ABS="$(pwd)"
+else
+    # 获取绝对路径
+    PROJECT_DIR_ABS="$(cd "$PROJECT_DIR" && pwd)"
+fi
+
+# 设置 main.go 路径（使用相对路径，因为后续会切换到项目目录）
+MAIN_GO_PATH_REL="adapter/api/apiadapter/main.go"
+MAIN_GO_PATH="$PROJECT_DIR_ABS/$MAIN_GO_PATH_REL"
+
+log_info "项目目录绝对路径: $PROJECT_DIR_ABS"
 
 # 停止现有服务
 log_step "2. 停止现有 Docker 服务..."
-cd "$PROJECT_DIR" || exit 1
+cd "$PROJECT_DIR_ABS" || exit 1
 
 # 停止可能运行的旧服务
 if docker compose ps 2>/dev/null | grep -q "allora-offchain-node"; then
@@ -48,7 +81,9 @@ else
     log_info "✅ 没有运行中的服务"
 fi
 
-cd ..
+cd "$INITIAL_DIR" || {
+    log_warn "⚠️  无法返回初始目录，继续在当前目录操作"
+}
 
 # 备份旧的 main.go
 log_step "3. 备份并清理 main.go 文件..."
@@ -66,7 +101,7 @@ fi
 
 # 检查并删除其他位置可能存在的错误位置的 main.go（如果包名是 apiadapter）
 log_info "清理其他位置的 apiadapter 包文件..."
-find "$PROJECT_DIR" -name "main.go" -type f | while IFS= read -r file; do
+find "$PROJECT_DIR_ABS" -name "main.go" -type f | while IFS= read -r file; do
     if [ "$file" != "$MAIN_GO_PATH" ]; then
         if grep -q "^package apiadapter" "$file" 2>/dev/null; then
             log_warn "⚠️  发现错误位置的 apiadapter 包文件: $file"
@@ -436,22 +471,16 @@ log_info "✅ 文件内容验证通过"
 # 最终检查：确保没有其他位置的 apiadapter 包的 main.go
 log_step "4.5. 最终清理检查..."
 CORRECT_REL_PATH="adapter/api/apiadapter/main.go"
+CORRECT_FULL_PATH="$PROJECT_DIR_ABS/$CORRECT_REL_PATH"
 
 # 使用临时文件收集需要删除的文件列表
 TEMP_DELETE_LIST=$(mktemp)
 trap "rm -f '$TEMP_DELETE_LIST'" EXIT
 
-find "$PROJECT_DIR" -name "main.go" -type f | while IFS= read -r file; do
+find "$PROJECT_DIR_ABS" -name "main.go" -type f | while IFS= read -r file; do
     if grep -q "^package apiadapter" "$file" 2>/dev/null; then
-        # 获取相对于项目目录的路径
-        rel_path="${file#$PROJECT_DIR/}"
-        
-        # 规范化路径（移除多余的斜杠）
-        rel_path=$(echo "$rel_path" | sed 's|^/||')
-        normalized_correct=$(echo "$CORRECT_REL_PATH" | sed 's|^/||')
-        
-        # 检查是否是正确的路径
-        if [ "$rel_path" != "$normalized_correct" ]; then
+        # 检查是否是正确的路径（使用绝对路径比较）
+        if [ "$file" != "$CORRECT_FULL_PATH" ]; then
             log_warn "⚠️  发现错误位置的 apiadapter 包文件: $file"
             echo "$file" >> "$TEMP_DELETE_LIST"
         else
@@ -484,24 +513,9 @@ fi
 # 重新构建和启动服务
 log_step "5. 重新构建和启动 Docker 服务..."
 
-# 确保在正确的目录（项目根目录，即脚本初始执行目录）
-cd "$INITIAL_DIR" || {
-    log_error "❌ 无法返回初始目录"
-    log_info "当前目录: $(pwd)"
-    exit 1
-}
-
-# 检查项目目录是否存在
-if [ ! -d "$PROJECT_DIR" ]; then
-    log_error "❌ 项目目录 $PROJECT_DIR 不存在"
-    log_info "当前目录: $(pwd)"
-    log_info "初始目录: $INITIAL_DIR"
-    exit 1
-fi
-
-# 进入项目目录
-cd "$PROJECT_DIR" || {
-    log_error "❌ 无法进入项目目录: $PROJECT_DIR"
+# 直接进入项目目录（使用保存的绝对路径）
+cd "$PROJECT_DIR_ABS" || {
+    log_error "❌ 无法进入项目目录: $PROJECT_DIR_ABS"
     log_info "当前目录: $(pwd)"
     exit 1
 }
