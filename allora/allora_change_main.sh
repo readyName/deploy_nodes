@@ -18,7 +18,7 @@ log_step() { echo -e "${BLUE}==>${NC} $1"; }
 
 # 常量定义
 PROJECT_DIR="allora-offchain-node"
-MAIN_GO_PATH="$PROJECT_DIR/adapters/apiadapter/main.go"
+MAIN_GO_PATH="$PROJECT_DIR/adapter/api/apiadapter/main.go"
 
 echo "🚀 Allora 替换 main.go 并重启节点..."
 echo "================================================"
@@ -61,26 +61,17 @@ else
     log_warn "⚠️  旧的 main.go 不存在，将直接创建新文件"
 fi
 
-# 检查并删除根目录下可能存在的错误位置的 main.go（如果包名是 apiadapter）
-ROOT_MAIN_GO="$PROJECT_DIR/main.go"
-if [ -f "$ROOT_MAIN_GO" ]; then
-    # 检查文件内容，如果是 apiadapter 包则删除
-    if grep -q "^package apiadapter" "$ROOT_MAIN_GO" 2>/dev/null; then
-        log_warn "⚠️  发现根目录下有错误位置的 main.go（apiadapter 包），正在删除..."
-        rm -f "$ROOT_MAIN_GO"
-        log_info "✅ 已删除错误位置的 main.go"
+# 检查并删除其他位置可能存在的错误位置的 main.go（如果包名是 apiadapter）
+log_info "清理其他位置的 apiadapter 包文件..."
+find "$PROJECT_DIR" -name "main.go" -type f | while IFS= read -r file; do
+    if [ "$file" != "$MAIN_GO_PATH" ]; then
+        if grep -q "^package apiadapter" "$file" 2>/dev/null; then
+            log_warn "⚠️  发现错误位置的 apiadapter 包文件: $file"
+            rm -f "$file"
+            log_info "✅ 已删除错误位置的文件: $file"
+        fi
     fi
-fi
-
-# 也检查 adapters 目录下的其他可能位置
-ADAPTERS_MAIN_GO="$PROJECT_DIR/adapters/main.go"
-if [ -f "$ADAPTERS_MAIN_GO" ]; then
-    if grep -q "^package apiadapter" "$ADAPTERS_MAIN_GO" 2>/dev/null; then
-        log_warn "⚠️  发现 adapters 目录下有错误位置的 main.go，正在删除..."
-        rm -f "$ADAPTERS_MAIN_GO"
-        log_info "✅ 已删除错误位置的 main.go"
-    fi
-fi
+done
 
 # 替换 main.go 文件
 log_step "4. 写入新的 main.go 文件..."
@@ -439,21 +430,9 @@ if ! grep -q "^package apiadapter" "$MAIN_GO_PATH" 2>/dev/null; then
 fi
 log_info "✅ 文件内容验证通过"
 
-# 最终检查：确保根目录下没有 apiadapter 包的 main.go
+# 最终检查：确保没有其他位置的 apiadapter 包的 main.go
 log_step "4.5. 最终清理检查..."
-ROOT_CHECK="$PROJECT_DIR/main.go"
-if [ -f "$ROOT_CHECK" ]; then
-    if grep -q "^package apiadapter" "$ROOT_CHECK" 2>/dev/null; then
-        log_warn "⚠️  构建前发现根目录下有 apiadapter 包的 main.go，正在删除..."
-        rm -f "$ROOT_CHECK"
-        log_info "✅ 已删除根目录下的冲突文件"
-    fi
-fi
-
-# 列出所有 main.go 文件位置并清理冲突文件
-log_info "检查所有 main.go 文件位置..."
-CORRECT_REL_PATH="adapters/apiadapter/main.go"
-CORRECT_FULL_PATH="$PROJECT_DIR/$CORRECT_REL_PATH"
+CORRECT_REL_PATH="adapter/api/apiadapter/main.go"
 
 # 使用临时文件收集需要删除的文件列表
 TEMP_DELETE_LIST=$(mktemp)
@@ -533,7 +512,7 @@ fi
 
 # 构建前最终清理：删除所有可能冲突的 main.go 文件（apiadapter 包在错误位置）
 log_info "构建前最终清理冲突文件..."
-CORRECT_REL_PATH="adapters/apiadapter/main.go"
+CORRECT_REL_PATH="adapter/api/apiadapter/main.go"
 
 # 查找所有 apiadapter 包的 main.go 文件
 find . -name "main.go" -type f | while read -r file; do
