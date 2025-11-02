@@ -453,18 +453,25 @@ fi
 # 列出所有 main.go 文件位置并清理冲突文件
 log_info "检查所有 main.go 文件位置..."
 CORRECT_REL_PATH="adapters/apiadapter/main.go"
+CORRECT_FULL_PATH="$PROJECT_DIR/$CORRECT_REL_PATH"
 
-find "$PROJECT_DIR" -name "main.go" -type f | while read -r file; do
+# 使用临时文件收集需要删除的文件列表
+TEMP_DELETE_LIST=$(mktemp)
+trap "rm -f '$TEMP_DELETE_LIST'" EXIT
+
+find "$PROJECT_DIR" -name "main.go" -type f | while IFS= read -r file; do
     if grep -q "^package apiadapter" "$file" 2>/dev/null; then
         # 获取相对于项目目录的路径
-        rel_path=${file#$PROJECT_DIR/}
+        rel_path="${file#$PROJECT_DIR/}"
+        
+        # 规范化路径（移除多余的斜杠）
+        rel_path=$(echo "$rel_path" | sed 's|^/||')
+        normalized_correct=$(echo "$CORRECT_REL_PATH" | sed 's|^/||')
         
         # 检查是否是正确的路径
-        if [ "$rel_path" != "$CORRECT_REL_PATH" ]; then
+        if [ "$rel_path" != "$normalized_correct" ]; then
             log_warn "⚠️  发现错误位置的 apiadapter 包文件: $file"
-            log_info "正在删除错误位置的文件..."
-            rm -f "$file"
-            log_info "✅ 已删除: $file"
+            echo "$file" >> "$TEMP_DELETE_LIST"
         else
             log_info "  ✓ 正确位置的 apiadapter 包文件: $file"
         fi
@@ -473,9 +480,45 @@ find "$PROJECT_DIR" -name "main.go" -type f | while read -r file; do
     fi
 done
 
+# 删除所有错误位置的文件
+if [ -s "$TEMP_DELETE_LIST" ]; then
+    DELETE_COUNT=$(wc -l < "$TEMP_DELETE_LIST" | tr -d ' ')
+    log_info "发现 $DELETE_COUNT 个需要删除的文件"
+    while IFS= read -r file; do
+        if [ -n "$file" ]; then
+            log_info "正在删除错误位置的文件: $file"
+            rm -f "$file"
+            if [ ! -f "$file" ]; then
+                log_info "✅ 已删除: $file"
+            else
+                log_warn "⚠️  删除失败: $file"
+            fi
+        fi
+    done < "$TEMP_DELETE_LIST"
+else
+    log_info "✅ 没有发现错误位置的 apiadapter 包文件"
+fi
+
 # 重新构建和启动服务
 log_step "5. 重新构建和启动 Docker 服务..."
-cd "$PROJECT_DIR" || exit 1
+
+# 确保在正确的目录（项目根目录）
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+cd "$SCRIPT_DIR" || exit 1
+
+# 检查项目目录是否存在
+if [ ! -d "$PROJECT_DIR" ]; then
+    log_error "❌ 项目目录 $PROJECT_DIR 不存在"
+    log_info "当前目录: $(pwd)"
+    exit 1
+fi
+
+# 进入项目目录
+cd "$PROJECT_DIR" || {
+    log_error "❌ 无法进入项目目录: $PROJECT_DIR"
+    log_info "当前目录: $(pwd)"
+    exit 1
+}
 
 # 检查 Docker 配置文件是否存在
 if [ ! -f "docker-compose.yml" ]; then
