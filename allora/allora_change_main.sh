@@ -57,16 +57,30 @@ fi
 if [ "$PROJECT_DIR" = "." ]; then
     # 如果 PROJECT_DIR 是 "."，表示当前目录就是项目目录
     PROJECT_DIR_ABS="$(pwd)"
+    log_info "当前目录就是项目目录，绝对路径: $PROJECT_DIR_ABS"
 else
     # 获取绝对路径
-    PROJECT_DIR_ABS="$(cd "$PROJECT_DIR" && pwd)"
+    if [ -d "$PROJECT_DIR" ]; then
+        PROJECT_DIR_ABS="$(cd "$PROJECT_DIR" && pwd)"
+        log_info "项目目录在子目录中，绝对路径: $PROJECT_DIR_ABS"
+    else
+        log_error "❌ 项目目录不存在: $PROJECT_DIR"
+        log_info "当前目录: $(pwd)"
+        exit 1
+    fi
 fi
 
-# 设置 main.go 路径（使用相对路径，因为后续会切换到项目目录）
+# 验证绝对路径是否有效
+if [ ! -d "$PROJECT_DIR_ABS" ]; then
+    log_error "❌ 获取的项目目录绝对路径无效: $PROJECT_DIR_ABS"
+    exit 1
+fi
+
+# 设置 main.go 路径（使用绝对路径）
 MAIN_GO_PATH_REL="adapter/api/apiadapter/main.go"
 MAIN_GO_PATH="$PROJECT_DIR_ABS/$MAIN_GO_PATH_REL"
 
-log_info "项目目录绝对路径: $PROJECT_DIR_ABS"
+log_info "✅ 项目目录绝对路径已设置: $PROJECT_DIR_ABS"
 
 # 停止现有服务
 log_step "2. 停止现有 Docker 服务..."
@@ -81,13 +95,13 @@ else
     log_info "✅ 没有运行中的服务"
 fi
 
-cd "$INITIAL_DIR" || {
-    log_warn "⚠️  无法返回初始目录，继续在当前目录操作"
-}
-
-# 备份旧的 main.go
+# 备份旧的 main.go（所有操作使用绝对路径，不需要切换目录）
 log_step "3. 备份并清理 main.go 文件..."
-# 确保目录存在
+
+# 确保在项目目录中（用于文件操作）
+cd "$PROJECT_DIR_ABS" || exit 1
+
+# 确保目录存在（使用绝对路径）
 mkdir -p "$(dirname "$MAIN_GO_PATH")"
 
 # 备份正确位置的文件
@@ -513,12 +527,23 @@ fi
 # 重新构建和启动服务
 log_step "5. 重新构建和启动 Docker 服务..."
 
-# 直接进入项目目录（使用保存的绝对路径）
+# 验证项目目录绝对路径
+if [ ! -d "$PROJECT_DIR_ABS" ]; then
+    log_error "❌ 项目目录不存在: $PROJECT_DIR_ABS"
+    log_info "当前目录: $(pwd)"
+    exit 1
+fi
+
+# 进入项目目录（使用保存的绝对路径）
+log_info "进入项目目录: $PROJECT_DIR_ABS"
 cd "$PROJECT_DIR_ABS" || {
     log_error "❌ 无法进入项目目录: $PROJECT_DIR_ABS"
     log_info "当前目录: $(pwd)"
     exit 1
 }
+
+# 验证当前目录
+log_info "当前工作目录: $(pwd)"
 
 # 检查 Docker 配置文件是否存在
 if [ ! -f "docker-compose.yml" ]; then
