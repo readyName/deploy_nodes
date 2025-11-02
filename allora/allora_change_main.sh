@@ -20,6 +20,9 @@ log_step() { echo -e "${BLUE}==>${NC} $1"; }
 PROJECT_DIR="allora-offchain-node"
 MAIN_GO_PATH="$PROJECT_DIR/adapter/api/apiadapter/main.go"
 
+# 保存脚本执行时的初始工作目录
+INITIAL_DIR="$(pwd)"
+
 echo "🚀 Allora 替换 main.go 并重启节点..."
 echo "================================================"
 
@@ -481,14 +484,18 @@ fi
 # 重新构建和启动服务
 log_step "5. 重新构建和启动 Docker 服务..."
 
-# 确保在正确的目录（项目根目录）
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-cd "$SCRIPT_DIR" || exit 1
+# 确保在正确的目录（项目根目录，即脚本初始执行目录）
+cd "$INITIAL_DIR" || {
+    log_error "❌ 无法返回初始目录"
+    log_info "当前目录: $(pwd)"
+    exit 1
+}
 
 # 检查项目目录是否存在
 if [ ! -d "$PROJECT_DIR" ]; then
     log_error "❌ 项目目录 $PROJECT_DIR 不存在"
     log_info "当前目录: $(pwd)"
+    log_info "初始目录: $INITIAL_DIR"
     exit 1
 fi
 
