@@ -62,17 +62,6 @@ check_dependencies() {
         fi
     fi
     
-    if ! command -v wget &> /dev/null; then
-        log_info "安装 wget..."
-        if [[ "$OS_TYPE" == "macos" ]]; then
-            brew install wget
-        elif [[ "$OS_TYPE" == "ubuntu" ]]; then
-            sudo apt update && sudo apt install -y wget
-        fi
-    else
-        log_info "✅ 检测到 wget 已安装，跳过安装"
-    fi
-    
     if ! command -v allorad &> /dev/null; then
         log_info "安装 allorad..."
         curl -sSL https://raw.githubusercontent.com/allora-network/allora-chain/dev/install.sh | bash -s -- v0.12.1
@@ -224,20 +213,85 @@ show_faucet_info() {
         exit 1
     fi
 }
-
-# 克隆项目
+# 新增：清理之前的部署（可选）
+clean_previous_deployment() {
+    log_step "0. 清理之前的部署..."
+    
+    read -p "是否清理之前的部署？(y/N): " -n 1 -r
+    echo
+    if [[ $REPLY =~ ^[Yy]$ ]]; then
+        log_info "清理中..."
+        
+        # 停止并删除Docker容器
+        if [ -d "$PROJECT_DIR" ]; then
+            cd "$PROJECT_DIR"
+            docker compose down 2>/dev/null || true
+            cd ..
+        fi
+        
+        # 删除项目目录（可选）
+        read -p "是否删除项目目录？(y/N): " -n 1 -r
+        echo
+        if [[ $REPLY =~ ^[Yy]$ ]]; then
+            rm -rf "$PROJECT_DIR"
+            log_info "✅ 已清理项目目录"
+        fi
+        
+        # 清理Docker资源（可选）
+        read -p "是否清理Docker镜像和缓存？(y/N): " -n 1 -r
+        echo
+        if [[ $REPLY =~ ^[Yy]$ ]]; then
+            docker system prune -f
+            log_info "✅ 已清理Docker资源"
+        fi
+    fi
+}
+# 改进的项目克隆函数
+# 在 clone_projects 函数中添加版本检查
 clone_projects() {
-    log_step "5. 克隆 Allora 项目..."
+    log_step "5. 设置 Allora 项目..."
     
     if [ ! -d "$PROJECT_DIR" ]; then
         git clone https://github.com/allora-network/allora-offchain-node.git
+        log_info "✅ 项目克隆完成"
     else
-        log_info "项目已存在，更新中..."
+        log_info "项目已存在，执行强制更新..."
         cd "$PROJECT_DIR"
-        git pull || log_warn "更新失败，使用现有版本"
+        
+        # 备份重要文件
+        if [ -f "config.json" ]; then
+            cp config.json ../config.json.backup
+            log_info "✅ 配置文件已备份"
+        fi
+        
+        # 重置所有本地修改
+        git reset --hard HEAD
+        # 强制拉取最新代码
+        git fetch origin
+        git checkout main
+        git reset --hard origin/main
+        
+        # 检查Go版本要求
+        if [ -f "go.mod" ]; then
+            log_info "检查Go版本要求..."
+            go_version_required=$(grep "^go " go.mod | cut -d' ' -f2)
+            log_info "项目需要 Go 版本: $go_version_required"
+        fi
+        
+        # 恢复备份的配置文件（如果用户想要）
+        if [ -f "../config.json.backup" ]; then
+            read -p "是否恢复之前的配置文件？(y/N): " -n 1 -r
+            echo
+            if [[ $REPLY =~ ^[Yy]$ ]]; then
+                cp ../config.json.backup config.json
+                log_info "✅ 配置文件已恢复"
+            fi
+            rm -f ../config.json.backup
+        fi
+        
         cd ..
+        log_info "✅ 项目更新完成"
     fi
-    log_info "✅ 项目克隆完成"
 }
 
 # 创建完整配置文件
@@ -357,17 +411,41 @@ EOF
     log_info "✅ 推理服务文件创建完成"
 }
 
-# 设置Docker环境
 setup_docker() {
     log_step "8. 设置 Docker 环境..."
     
     cd "$PROJECT_DIR"
+    
+    # 停止可能运行的旧服务
+    docker compose down 2>/dev/null || true
+    
+    # 删除所有相关的Docker镜像（避免缓存问题）
+    docker rmi -f $(docker images | grep "allora" | awk '{print $3}') 2>/dev/null || true
     
     # 清理重复的 docker-compose 文件
     if [ -f "docker-compose.yaml" ]; then
         rm docker-compose.yaml
         log_info "✅ 已删除重复的 docker-compose.yaml"
     fi
+    
+    # 创建修复版 Dockerfile.offchain - 使用正确的Go版本
+    cat > Dockerfile.offchain << 'EOF'
+FROM golang:1.22-alpine
+
+WORKDIR /app
+COPY . .
+
+# 设置Go代理
+RUN go env -w GOPROXY=https://goproxy.cn,https://goproxy.io,direct
+RUN go env -w GOSUMDB=off
+
+# 下载依赖并构建
+RUN go mod download
+RUN go build -o allora-offchain-node .
+
+EXPOSE 8080
+CMD ["./allora-offchain-node"]
+EOF
     
     # 创建 docker-compose.yml
     cat > docker-compose.yml << 'EOF'
@@ -382,12 +460,13 @@ services:
     volumes:
       - ./config.json:/app/config.json:ro
     ports:
-      - "8081:8080"
+      - "8082:8080"
     networks:
       - allora-network
+    restart: unless-stopped
 
   inference-server:
-    image: python:3.9-slim
+    image: python:3.9-alpine
     container_name: allora-inference-server
     working_dir: /app
     volumes:
@@ -395,43 +474,14 @@ services:
       - ./main.py:/app/main.py
     ports:
       - "8000:8000"
-    #command: sh -c "pip install --timeout 120 -r requirements.txt && python main.py"
-    entrypoint: ["sh", "-c"]
-    command: >
-      pip install -i https://pypi.tuna.tsinghua.edu.cn/simple -r requirements.txt &&
-      exec python main.py
+    command: sh -c "pip install --timeout 120 -r requirements.txt && python main.py"
     networks:
       - allora-network
+    restart: unless-stopped
 
 networks:
   allora-network:
     driver: bridge
-EOF
-    
-    # 创建 Dockerfile.offchain
-    cat > Dockerfile.offchain << 'EOF'
-FROM python:3.9-slim
-
-# 安装Go
-RUN apt-get update && apt-get install -y wget git && \
-    wget https://golang.google.cn/dl/go1.21.7.linux-amd64.tar.gz -O go.tar.gz && \
-    tar -C /usr/local -xzf go.tar.gz && \
-    rm go.tar.gz
-
-ENV PATH="/usr/local/go/bin:${PATH}"
-
-WORKDIR /app
-
-# 复制本地代码到容器中
-COPY . .
-
-# 设置Go代理并构建
-RUN go env -w GOPROXY=https://goproxy.cn,direct && \
-    go mod download && \
-    go build -o allora-offchain-node .
-
-EXPOSE 8080
-CMD ["./allora-offchain-node"]
 EOF
     
     cd ..
@@ -557,6 +607,8 @@ show_deployment_info() {
     echo "   1. 监控节点日志确保正常运行"
     echo "   2. 检查节点是否成功注册到网络"
     echo "   3. 验证推理服务是否正常工作"
+    echo "💾 钱包信息已保存到: $(pwd)/$WALLET_INFO_FILE"
+    echo "🔐 请务必备份此文件，或手动记录助记词！"
     echo ""
 }
 
@@ -565,7 +617,8 @@ main_deployment() {
     echo "================================================"
     echo "🚀 Allora Network 完整部署开始"
     echo "================================================"
-    
+    # 新增：询问是否清理
+    clean_previous_deployment
     check_dependencies
     start_docker_if_needed
     setup_wallet
