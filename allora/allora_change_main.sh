@@ -450,11 +450,24 @@ if [ -f "$ROOT_CHECK" ]; then
     fi
 fi
 
-# 列出所有 main.go 文件位置以便调试
+# 列出所有 main.go 文件位置并清理冲突文件
 log_info "检查所有 main.go 文件位置..."
+CORRECT_REL_PATH="adapters/apiadapter/main.go"
+
 find "$PROJECT_DIR" -name "main.go" -type f | while read -r file; do
     if grep -q "^package apiadapter" "$file" 2>/dev/null; then
-        log_info "  ✓ 找到 apiadapter 包文件: $file"
+        # 获取相对于项目目录的路径
+        rel_path=${file#$PROJECT_DIR/}
+        
+        # 检查是否是正确的路径
+        if [ "$rel_path" != "$CORRECT_REL_PATH" ]; then
+            log_warn "⚠️  发现错误位置的 apiadapter 包文件: $file"
+            log_info "正在删除错误位置的文件..."
+            rm -f "$file"
+            log_info "✅ 已删除: $file"
+        else
+            log_info "  ✓ 正确位置的 apiadapter 包文件: $file"
+        fi
     else
         log_info "  - 其他包文件: $file"
     fi
@@ -477,25 +490,21 @@ fi
 
 # 构建前最终清理：删除所有可能冲突的 main.go 文件（apiadapter 包在错误位置）
 log_info "构建前最终清理冲突文件..."
-cd "$PROJECT_DIR" || exit 1
+CORRECT_REL_PATH="adapters/apiadapter/main.go"
 
-# 查找并删除根目录下 apiadapter 包的 main.go
-find . -maxdepth 1 -name "main.go" -type f | while read -r file; do
+# 查找所有 apiadapter 包的 main.go 文件
+find . -name "main.go" -type f | while read -r file; do
     if grep -q "^package apiadapter" "$file" 2>/dev/null; then
-        log_warn "⚠️  删除根目录下的冲突文件: $file"
-        rm -f "$file"
-    fi
-done
-
-# 查找并删除 adapters 目录下（非 apiadapter 子目录）的 main.go
-if [ -d "adapters" ]; then
-    find adapters -maxdepth 1 -name "main.go" -type f | while read -r file; do
-        if grep -q "^package apiadapter" "$file" 2>/dev/null; then
-            log_warn "⚠️  删除 adapters 目录下的冲突文件: $file"
+        # 获取相对路径
+        rel_path=${file#./}
+        
+        # 检查是否是正确的路径
+        if [ "$rel_path" != "$CORRECT_REL_PATH" ]; then
+            log_warn "⚠️  发现并删除错误位置的 apiadapter 包文件: $file"
             rm -f "$file"
         fi
-    done
-fi
+    fi
+done
 
 log_info "✅ 清理完成"
 
