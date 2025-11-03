@@ -74,17 +74,71 @@ check_dependencies() {
         log_info "✅ 检测到 wget 已安装，跳过安装"
     fi
     
+    # allorad 路径配置
+    ALLORA_BIN_PATH=""
+    if [[ "$OS_TYPE" == "macos" ]]; then
+        ALLORA_BIN_PATH="/Users/$(whoami)/.local/bin"
+    else
+        ALLORA_BIN_PATH="$HOME/.local/bin"
+    fi
+    
     if ! command -v allorad &> /dev/null; then
         log_info "安装 allorad..."
         curl -sSL https://raw.githubusercontent.com/allora-network/allora-chain/dev/install.sh | bash -s -- v0.12.1
+        
+        # 添加到 PATH 环境变量（当前会话）
+        export PATH="$PATH:$ALLORA_BIN_PATH"
+        
+        # 添加到 shell 配置文件（永久生效）
         if [[ "$OS_TYPE" == "macos" ]]; then
-            export PATH="$PATH:/Users/$(whoami)/.local/bin"
+            if [ -f ~/.zshrc ] && ! grep -q "$ALLORA_BIN_PATH" ~/.zshrc; then
+                echo "export PATH=\"\$PATH:$ALLORA_BIN_PATH\"" >> ~/.zshrc
+                log_info "✅ 已添加到 ~/.zshrc"
+            fi
+            if [ -f ~/.bash_profile ] && ! grep -q "$ALLORA_BIN_PATH" ~/.bash_profile; then
+                echo "export PATH=\"\$PATH:$ALLORA_BIN_PATH\"" >> ~/.bash_profile
+                log_info "✅ 已添加到 ~/.bash_profile"
+            fi
         else
-            export PATH="$PATH:$HOME/.local/bin"
+            if [ -f ~/.bashrc ] && ! grep -q "$ALLORA_BIN_PATH" ~/.bashrc; then
+                echo "export PATH=\"\$PATH:$ALLORA_BIN_PATH\"" >> ~/.bashrc
+                log_info "✅ 已添加到 ~/.bashrc"
+            fi
+            if [ -f ~/.zshrc ] && ! grep -q "$ALLORA_BIN_PATH" ~/.zshrc; then
+                echo "export PATH=\"\$PATH:$ALLORA_BIN_PATH\"" >> ~/.zshrc
+                log_info "✅ 已添加到 ~/.zshrc"
+            fi
         fi
+        
         log_info "✅ allorad 安装完成"
+        
+        # 验证安装
+        if command -v allorad &> /dev/null; then
+            log_info "✅ allorad 已可用: $(allorad version 2>/dev/null || echo '已安装')"
+        else
+            log_warn "⚠️  allorad 安装完成，但当前会话中不可用，请重新打开终端或运行: source ~/.bashrc (或 ~/.zshrc)"
+        fi
     else
         log_info "✅ 检测到 allorad 已安装，跳过安装"
+        
+        # 确保环境变量已加载（即使已安装也要确保 PATH 包含 allorad 路径）
+        if [[ ":$PATH:" != *":$ALLORA_BIN_PATH:"* ]]; then
+            export PATH="$PATH:$ALLORA_BIN_PATH"
+            log_info "✅ 已加载 allorad 到当前会话环境变量"
+        fi
+        
+        # 检查是否需要添加到配置文件
+        if [[ "$OS_TYPE" == "macos" ]]; then
+            if [ -f ~/.zshrc ] && ! grep -q "$ALLORA_BIN_PATH" ~/.zshrc; then
+                echo "export PATH=\"\$PATH:$ALLORA_BIN_PATH\"" >> ~/.zshrc
+                log_info "✅ 已添加到 ~/.zshrc（永久生效）"
+            fi
+        else
+            if [ -f ~/.bashrc ] && ! grep -q "$ALLORA_BIN_PATH" ~/.bashrc; then
+                echo "export PATH=\"\$PATH:$ALLORA_BIN_PATH\"" >> ~/.bashrc
+                log_info "✅ 已添加到 ~/.bashrc（永久生效）"
+            fi
+        fi
     fi
     
     log_info "✅ 依赖检查通过"
