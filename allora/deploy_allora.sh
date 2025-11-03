@@ -646,6 +646,83 @@ check_services() {
     cd ..
 }
 
+# 生成 macOS 桌面启动文件
+create_macos_command_file() {
+    if [[ "$OS_TYPE" != "macos" ]]; then
+        return 0
+    fi
+    
+    log_step "11. 生成 macOS 启动文件..."
+    
+    DESKTOP_DIR="$HOME/Desktop"
+    if [ ! -d "$DESKTOP_DIR" ]; then
+        DESKTOP_DIR="$HOME"
+        log_warn "⚠️  未找到桌面目录，将在用户主目录生成文件"
+    fi
+    
+    PROJECT_DIR_ABS="$(cd "$PROJECT_DIR" && pwd)"
+    
+    cat > "$DESKTOP_DIR/allora.command" << EOF
+#!/bin/bash
+
+# Allora 节点启动脚本
+set -e
+
+# 颜色定义
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+NC='\033[0m'
+
+echo -e "\${GREEN}🚀 启动 Allora 节点...\${NC}"
+echo "================================================"
+
+# 进入项目目录
+cd "$PROJECT_DIR_ABS" || {
+    echo -e "\${RED}❌ 无法进入项目目录: $PROJECT_DIR_ABS\${NC}"
+    echo "按任意键关闭窗口..."
+    read -n 1 -s
+    exit 1
+}
+
+# 停止现有服务
+echo -e "\${BLUE}📋 停止现有节点（如果有）...\${NC}"
+docker compose down 2>/dev/null || true
+
+# 等待服务完全停止
+if docker ps | grep -q "allora-offchain-node\|allora-inference-server"; then
+    echo -e "\${YELLOW}⏳ 等待服务停止...\${NC}"
+    sleep 3
+    docker compose down 2>/dev/null || true
+fi
+
+# 启动服务（前台运行）
+echo -e "\${GREEN}🚀 启动 Allora 节点（前台运行）...\${NC}"
+echo ""
+echo -e "\${BLUE}提示：\${NC}"
+echo "  - 按 Ctrl+C 可以停止节点"
+echo "  - 关闭此窗口也会停止节点"
+echo "  - 查看日志了解节点运行状态"
+echo ""
+echo "================================================"
+echo ""
+
+# 启动服务（前台运行）
+docker compose up
+
+# 如果服务意外退出，显示提示
+echo ""
+echo -e "\${YELLOW}⚠️  节点已停止\${NC}"
+echo "按任意键关闭窗口..."
+read -n 1 -s
+EOF
+    
+    chmod +x "$DESKTOP_DIR/allora.command"
+    log_info "✅ 已生成启动文件: $DESKTOP_DIR/allora.command"
+    log_info "   双击此文件即可启动 Allora 节点（前台运行）"
+}
+
 # 显示部署完成信息
 show_deployment_info() {
     log_step "🎉 Allora 部署完成！"
@@ -696,6 +773,7 @@ main_deployment() {
     start_services
     check_services
     show_deployment_info
+    create_macos_command_file
     
     echo "================================================"
     log_info "✅ Allora Network 部署完成！"
