@@ -35,6 +35,24 @@ log_warn() { echo -e "${YELLOW}[WARN]${NC} $1"; }
 log_error() { echo -e "${RED}[ERROR]${NC} $1"; }
 log_step() { echo -e "${BLUE}==>${NC} $1"; }
 
+# 加载环境变量到当前会话（尽力而为，不阻塞）
+load_shell_env() {
+    # 优先加载常见的 shell 配置文件
+    if [ -n "$ZSH_VERSION" ] && [ -f "$HOME/.zshrc" ]; then
+        # shellcheck disable=SC1090
+        . "$HOME/.zshrc" 2>/dev/null || true
+    fi
+    if [ -n "$BASH_VERSION" ] && [ -f "$HOME/.bashrc" ]; then
+        # shellcheck disable=SC1090
+        . "$HOME/.bashrc" 2>/dev/null || true
+    fi
+    if [ -f "$HOME/.bash_profile" ]; then
+        # shellcheck disable=SC1090
+        . "$HOME/.bash_profile" 2>/dev/null || true
+    fi
+    hash -r 2>/dev/null || true
+}
+
 # 检查依赖
 check_dependencies() {
     log_step "1. 检查系统依赖..."
@@ -88,6 +106,7 @@ check_dependencies() {
         
         # 添加到 PATH 环境变量（当前会话）
         export PATH="$PATH:$ALLORA_BIN_PATH"
+        load_shell_env
         
         # 添加到 shell 配置文件（永久生效）
         if [[ "$OS_TYPE" == "macos" ]]; then
@@ -126,6 +145,7 @@ check_dependencies() {
             export PATH="$PATH:$ALLORA_BIN_PATH"
             log_info "✅ 已加载 allorad 到当前会话环境变量"
         fi
+        load_shell_env
         
         # 检查是否需要添加到配置文件
         if [[ "$OS_TYPE" == "macos" ]]; then
