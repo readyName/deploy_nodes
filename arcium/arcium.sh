@@ -341,9 +341,26 @@ check_and_airdrop() {
     # 简化余额检查（避免依赖 bc）
     if [[ "$balance" == "0" ]] || [[ "$balance" == "0.0" ]] || [[ "$balance_output" == *"error"* ]]; then
         log "余额不足或无法获取，获取空投..."
-        if solana airdrop 5 $owner_address -u devnet 2>/dev/null; then
-            success "空投请求已提交，等待到账..."
+        
+        # 自动重试空投，无限重试直到成功
+        local airdrop_retry=0
+        local airdrop_success=false
+        
+        while true; do
+            airdrop_retry=$((airdrop_retry + 1))
+            log "尝试获取空投 (第 $airdrop_retry 次)..."
             
+            if solana airdrop 5 $owner_address -u devnet 2>/dev/null; then
+                success "空投请求已提交，等待到账..."
+                airdrop_success=true
+                break
+            else
+                warning "空投请求失败，10秒后重试..."
+                sleep 10
+            fi
+        done
+        
+        if [ "$airdrop_success" = true ]; then
             # 等待余额到账
             local max_checks=8
             local check_count=0
@@ -364,14 +381,14 @@ check_and_airdrop() {
             
             if [[ "$balance" == "0" ]] || [[ "$balance" == "0.0" ]]; then
                 warning "空投可能未到账，当前余额: $balance SOL"
-                info "请手动获取空投: https://faucet.solana.com/"
+                info "继续等待或可能需要手动获取空投: https://faucet.solana.com/"
                 info "地址: $owner_address"
-                read -p "获取空投后按回车键继续..."
             fi
         else
-            warning "自动空投失败，请手动获取空投"
+            # 理论上不会到达这里，因为会无限重试直到成功
+            error "空投请求失败"
+            warning "请手动获取空投: https://faucet.solana.com/"
             info "集群所有者地址: $owner_address"
-            info "请访问: https://faucet.solana.com/"
             read -p "获取空投后按回车键继续..."
         fi
     else
@@ -1089,12 +1106,26 @@ setup_arx_node() {
         log "节点地址余额不足，开始获取资金..."
         local funding_success=false
         
-        # 方法1: 尝试官方领水
+        # 方法1: 尝试官方领水（无限重试直到成功）
         log "尝试官方领水..."
-        if solana airdrop 5 $node_pubkey -u devnet 2>/dev/null; then
-            success "官方领水成功，等待到账..."
-            funding_success=true
-        else
+        local airdrop_retry=0
+        
+        while true; do
+            airdrop_retry=$((airdrop_retry + 1))
+            log "尝试获取空投 (第 $airdrop_retry 次)..."
+            
+            if solana airdrop 5 $node_pubkey -u devnet 2>/dev/null; then
+                success "官方领水成功，等待到账..."
+                funding_success=true
+                break
+            else
+                warning "空投请求失败，10秒后重试..."
+                sleep 10
+            fi
+        done
+        
+        # 理论上不会到达这里，因为会无限重试直到成功
+        if [ "$funding_success" != true ]; then
             warning "官方领水失败，尝试集群转账..."
             
             # 方法2: 从集群所有者转账
