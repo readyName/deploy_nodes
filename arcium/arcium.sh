@@ -1717,6 +1717,61 @@ show_node_info() {
     warning "请妥善保存生成的密钥文件！"
 }
 
+# 显示所有地址和私钥
+show_all_keys() {
+    echo
+    echo -e "${GREEN}"
+    echo "╔══════════════════════════════════════════════════════════════╗"
+    echo "║              所有地址和私钥信息                            ║"
+    echo "╚══════════════════════════════════════════════════════════════╝"
+    echo -e "${NC}"
+    echo
+    
+    # 1. 集群所有者地址和密钥
+    local CLUSTER_DIR="$HOME/arcium-cluster-setup"
+    if [[ -f "$CLUSTER_DIR/cluster-owner-keypair.json" ]]; then
+        local cluster_owner_address=$(solana address --keypair "$CLUSTER_DIR/cluster-owner-keypair.json" 2>/dev/null || echo "")
+        if [[ -n "$cluster_owner_address" ]]; then
+            info "1. 集群所有者地址和私钥:"
+            echo "   地址: $cluster_owner_address"
+            echo "   私钥文件: $CLUSTER_DIR/cluster-owner-keypair.json"
+            echo "   私钥内容:"
+            cat "$CLUSTER_DIR/cluster-owner-keypair.json" | sed 's/^/   /'
+            echo
+        fi
+    fi
+    
+    # 2. 节点地址和密钥
+    local NODE_DIR="$HOME/arcium-node-setup"
+    if [[ -f "$NODE_DIR/node-keypair.json" ]]; then
+        local node_address=$(solana address --keypair "$NODE_DIR/node-keypair.json" 2>/dev/null || echo "")
+        if [[ -n "$node_address" ]]; then
+            info "2. 节点地址和私钥:"
+            echo "   地址: $node_address"
+            echo "   私钥文件: $NODE_DIR/node-keypair.json"
+            echo "   私钥内容:"
+            cat "$NODE_DIR/node-keypair.json" | sed 's/^/   /'
+            echo
+        fi
+    fi
+    
+    # 3. 回调地址和密钥
+    if [[ -f "$NODE_DIR/callback-kp.json" ]]; then
+        local callback_address=$(solana address --keypair "$NODE_DIR/callback-kp.json" 2>/dev/null || echo "")
+        if [[ -n "$callback_address" ]]; then
+            info "3. 回调地址和私钥:"
+            echo "   地址: $callback_address"
+            echo "   私钥文件: $NODE_DIR/callback-kp.json"
+            echo "   私钥内容:"
+            cat "$NODE_DIR/callback-kp.json" | sed 's/^/   /'
+            echo
+        fi
+    fi
+    
+    warning "⚠️  请妥善保管以上所有私钥信息！"
+    echo
+}
+
 # 显示使用说明
 show_usage() {
     echo
@@ -2003,6 +2058,9 @@ main() {
             
             log "调用 show_node_info 显示节点信息..."
             show_node_info "$node_offset" "$node_pubkey" "$callback_pubkey" "$actual_port"
+            
+            # 显示所有地址和私钥
+            show_all_keys
             
             log "🎉 节点部署流程全部完成！"
         else
