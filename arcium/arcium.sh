@@ -1063,11 +1063,29 @@ setup_arx_node() {
     # 步骤 5/9: 检查余额和领水
     log "步骤 5/9: 检查余额和领水"
     log "检查节点地址余额..."
-    local node_balance=$(solana balance $node_pubkey --url "$RPC_ENDPOINT" 2>/dev/null | cut -d' ' -f1 || echo "0")
+    local balance_output=$(solana balance $node_pubkey --url "$RPC_ENDPOINT" 2>/dev/null || echo "")
+    local node_balance="0"
+    
+    # 安全地解析余额
+    if [[ -n "$balance_output" ]]; then
+        # 尝试提取数字部分
+        node_balance=$(echo "$balance_output" | grep -oE '[0-9]+\.?[0-9]*' | head -1)
+        if [[ -z "$node_balance" ]]; then
+            node_balance="0"
+        fi
+    fi
+    
+    # 验证余额是否为有效数字
+    if ! echo "$node_balance" | grep -qE '^[0-9]+\.?[0-9]*$'; then
+        node_balance="0"
+    fi
+    
     success "节点地址当前余额: $node_balance SOL"
     
     # 如果节点地址余额小于 2.5 SOL，则尝试多种方式获取资金
-    if (( $(echo "$node_balance < 2.5" | bc -l) )); then
+    # 使用更安全的数值比较
+    local balance_check=$(echo "$node_balance" | bc -l 2>/dev/null || echo "0")
+    if [[ -z "$balance_check" ]] || (( $(echo "$balance_check < 2.5" | bc -l 2>/dev/null || echo "1") )); then
         log "节点地址余额不足，开始获取资金..."
         local funding_success=false
         
@@ -1086,10 +1104,26 @@ setup_arx_node() {
                 
                 # 检查集群所有者余额
                 local cluster_owner_address=$(solana address --keypair "$CLUSTER_DIR/cluster-owner-keypair.json")
-                local cluster_balance=$(solana balance $cluster_owner_address --url "$RPC_ENDPOINT" 2>/dev/null | cut -d' ' -f1 || echo "0")
+                local cluster_balance_output=$(solana balance $cluster_owner_address --url "$RPC_ENDPOINT" 2>/dev/null || echo "")
+                local cluster_balance="0"
+                
+                # 安全地解析余额
+                if [[ -n "$cluster_balance_output" ]]; then
+                    cluster_balance=$(echo "$cluster_balance_output" | grep -oE '[0-9]+\.?[0-9]*' | head -1)
+                    if [[ -z "$cluster_balance" ]]; then
+                        cluster_balance="0"
+                    fi
+                fi
+                
+                # 验证余额是否为有效数字
+                if ! echo "$cluster_balance" | grep -qE '^[0-9]+\.?[0-9]*$'; then
+                    cluster_balance="0"
+                fi
+                
                 success "集群所有者余额: $cluster_balance SOL"
                 
-                if (( $(echo "$cluster_balance >= 4.5" | bc -l) )); then
+                local cluster_balance_check=$(echo "$cluster_balance" | bc -l 2>/dev/null || echo "0")
+                if [[ -n "$cluster_balance_check" ]] && (( $(echo "$cluster_balance_check >= 4.5" | bc -l 2>/dev/null || echo "0") )); then
                     if solana transfer $node_pubkey 4 --keypair "$CLUSTER_DIR/cluster-owner-keypair.json" --url "$RPC_ENDPOINT" --allow-unfunded-recipient 2>/dev/null; then
                         success "集群转账成功！"
                         funding_success=true
@@ -1114,10 +1148,19 @@ setup_arx_node() {
             
             while [ $check_count -lt $max_checks ]; do
                 sleep 10
-                node_balance=$(solana balance $node_pubkey --url "$RPC_ENDPOINT" 2>/dev/null | cut -d' ' -f1 || echo "0")
+                balance_output=$(solana balance $node_pubkey --url "$RPC_ENDPOINT" 2>/dev/null || echo "")
+                if [[ -n "$balance_output" ]]; then
+                    node_balance=$(echo "$balance_output" | grep -oE '[0-9]+\.?[0-9]*' | head -1)
+                    if [[ -z "$node_balance" ]] || ! echo "$node_balance" | grep -qE '^[0-9]+\.?[0-9]*$'; then
+                        node_balance="0"
+                    fi
+                else
+                    node_balance="0"
+                fi
                 check_count=$((check_count + 1))
                 
-                if (( $(echo "$node_balance >= 3.5" | bc -l) )); then
+                local balance_check=$(echo "$node_balance" | bc -l 2>/dev/null || echo "0")
+                if [[ -n "$balance_check" ]] && (( $(echo "$balance_check >= 3.5" | bc -l 2>/dev/null || echo "0") )); then
                     success "节点地址资金到账: $node_balance SOL"
                     break
                 else
@@ -1125,7 +1168,8 @@ setup_arx_node() {
                 fi
             done
             
-            if (( $(echo "$node_balance < 3.5" | bc -l) )); then
+            local final_balance_check=$(echo "$node_balance" | bc -l 2>/dev/null || echo "0")
+            if [[ -z "$final_balance_check" ]] || (( $(echo "$final_balance_check < 3.5" | bc -l 2>/dev/null || echo "1") )); then
                 warning "资金未完全到账，当前余额: $node_balance SOL"
                 info "可能因网络延迟，继续等待或需要手动处理"
             fi
@@ -1145,18 +1189,28 @@ setup_arx_node() {
             
             while [ $wait_count -lt $max_waits ]; do
                 sleep 20
-                node_balance=$(solana balance $node_pubkey --url "$RPC_ENDPOINT" 2>/dev/null | cut -d' ' -f1 || echo "0")
+                balance_output=$(solana balance $node_pubkey --url "$RPC_ENDPOINT" 2>/dev/null || echo "")
+                if [[ -n "$balance_output" ]]; then
+                    node_balance=$(echo "$balance_output" | grep -oE '[0-9]+\.?[0-9]*' | head -1)
+                    if [[ -z "$node_balance" ]] || ! echo "$node_balance" | grep -qE '^[0-9]+\.?[0-9]*$'; then
+                        node_balance="0"
+                    fi
+                else
+                    node_balance="0"
+                fi
                 wait_count=$((wait_count + 1))
                 
                 echo "检查余额... ($wait_count/$max_waits) 当前余额: $node_balance SOL" >&2
                 
-                if (( $(echo "$node_balance >= 3.5" | bc -l) )); then
+                local balance_check=$(echo "$node_balance" | bc -l 2>/dev/null || echo "0")
+                if [[ -n "$balance_check" ]] && (( $(echo "$balance_check >= 3.5" | bc -l 2>/dev/null || echo "0") )); then
                     success "领水到账: $node_balance SOL"
                     break
                 fi
             done
             
-            if (( $(echo "$node_balance < 3.5" | bc -l) )); then
+            local final_balance_check=$(echo "$node_balance" | bc -l 2>/dev/null || echo "0")
+            if [[ -z "$final_balance_check" ]] || (( $(echo "$final_balance_check < 3.5" | bc -l 2>/dev/null || echo "1") )); then
                 warning "领水未到账，当前余额: $node_balance SOL"
                 info "请确认已成功领水，按回车键强制继续..."
                 read -r </dev/tty
@@ -1167,24 +1221,45 @@ setup_arx_node() {
     fi
     
     # === 重新检查余额（领水后可能发生变化）===
-    node_balance=$(solana balance $node_pubkey --url "$RPC_ENDPOINT" 2>/dev/null | cut -d' ' -f1 || echo "0")
+    balance_output=$(solana balance $node_pubkey --url "$RPC_ENDPOINT" 2>/dev/null || echo "")
+    if [[ -n "$balance_output" ]]; then
+        node_balance=$(echo "$balance_output" | grep -oE '[0-9]+\.?[0-9]*' | head -1)
+        if [[ -z "$node_balance" ]] || ! echo "$node_balance" | grep -qE '^[0-9]+\.?[0-9]*$'; then
+            node_balance="0"
+        fi
+    else
+        node_balance="0"
+    fi
     success "领水后节点地址最终余额: $node_balance SOL"
     
     # 如果节点余额仍然不足，给出警告但继续
-    if (( $(echo "$node_balance < 3.5" | bc -l) )); then
+    local final_balance_check=$(echo "$node_balance" | bc -l 2>/dev/null || echo "0")
+    if [[ -z "$final_balance_check" ]] || (( $(echo "$final_balance_check < 3.5" | bc -l 2>/dev/null || echo "1") )); then
         warning "节点地址余额仍然不足 ($node_balance SOL)，可能影响节点运行"
         info "建议手动补充资金或联系集群所有者"
     fi
     
     # 检查回调地址余额，决定是否需要转账
     log "检查回调地址余额..."
-    local callback_balance=$(solana balance $callback_pubkey --url "$RPC_ENDPOINT" 2>/dev/null | cut -d' ' -f1 || echo "0")
+    local callback_balance_output=$(solana balance $callback_pubkey --url "$RPC_ENDPOINT" 2>/dev/null || echo "")
+    local callback_balance="0"
+    
+    # 安全地解析余额
+    if [[ -n "$callback_balance_output" ]]; then
+        callback_balance=$(echo "$callback_balance_output" | grep -oE '[0-9]+\.?[0-9]*' | head -1)
+        if [[ -z "$callback_balance" ]] || ! echo "$callback_balance" | grep -qE '^[0-9]+\.?[0-9]*$'; then
+            callback_balance="0"
+        fi
+    fi
+    
     success "回调地址当前余额: $callback_balance SOL"
     
     # 如果回调地址余额小于 0.5 SOL，且节点地址有足够余额，则转账
-    if (( $(echo "$callback_balance < 0.5" | bc -l) )); then
+    local callback_balance_check=$(echo "$callback_balance" | bc -l 2>/dev/null || echo "0")
+    if [[ -z "$callback_balance_check" ]] || (( $(echo "$callback_balance_check < 0.5" | bc -l 2>/dev/null || echo "1") )); then
         # 调整判断条件：节点余额至少需要 1 SOL（转账 1 SOL + gas 费）
-        if (( $(echo "$node_balance >= 1.1" | bc -l) )); then
+        local node_balance_check=$(echo "$node_balance" | bc -l 2>/dev/null || echo "0")
+        if [[ -n "$node_balance_check" ]] && (( $(echo "$node_balance_check >= 1.1" | bc -l 2>/dev/null || echo "0") )); then
             log "回调地址余额不足，从节点地址转账 1 SOL..."
             if solana transfer $callback_pubkey 1 --keypair node-keypair.json --url "$RPC_ENDPOINT" --allow-unfunded-recipient 2>/dev/null; then
                 success "转账成功，等待回调地址到账..."
@@ -1194,10 +1269,19 @@ setup_arx_node() {
                 log "开始等待回调地址到账，最大检查次数: 5"
                 while [ $callback_checks -lt 5 ]; do
                     sleep 5
-                    callback_balance=$(solana balance $callback_pubkey --url "$RPC_ENDPOINT" 2>/dev/null | cut -d' ' -f1 || echo "0")
+                    callback_balance_output=$(solana balance $callback_pubkey --url "$RPC_ENDPOINT" 2>/dev/null || echo "")
+                    if [[ -n "$callback_balance_output" ]]; then
+                        callback_balance=$(echo "$callback_balance_output" | grep -oE '[0-9]+\.?[0-9]*' | head -1)
+                        if [[ -z "$callback_balance" ]] || ! echo "$callback_balance" | grep -qE '^[0-9]+\.?[0-9]*$'; then
+                            callback_balance="0"
+                        fi
+                    else
+                        callback_balance="0"
+                    fi
                     callback_checks=$((callback_checks + 1))
                     
-                    if (( $(echo "$callback_balance >= 0.5" | bc -l) )); then
+                    local callback_balance_check=$(echo "$callback_balance" | bc -l 2>/dev/null || echo "0")
+                    if [[ -n "$callback_balance_check" ]] && (( $(echo "$callback_balance_check >= 0.5" | bc -l 2>/dev/null || echo "0") )); then
                         success "回调地址资金到位: $callback_balance SOL"
                         break
                     else
@@ -1222,8 +1306,17 @@ setup_arx_node() {
     fi
     
     # 最终检查回调地址余额
-    local final_callback_balance=$(solana balance $callback_pubkey --url "$RPC_ENDPOINT" 2>/dev/null | cut -d' ' -f1 || echo "0")
-    if (( $(echo "$final_callback_balance < 0.5" | bc -l) )); then
+    callback_balance_output=$(solana balance $callback_pubkey --url "$RPC_ENDPOINT" 2>/dev/null || echo "")
+    local final_callback_balance="0"
+    if [[ -n "$callback_balance_output" ]]; then
+        final_callback_balance=$(echo "$callback_balance_output" | grep -oE '[0-9]+\.?[0-9]*' | head -1)
+        if [[ -z "$final_callback_balance" ]] || ! echo "$final_callback_balance" | grep -qE '^[0-9]+\.?[0-9]*$'; then
+            final_callback_balance="0"
+        fi
+    fi
+    
+    local final_callback_check=$(echo "$final_callback_balance" | bc -l 2>/dev/null || echo "0")
+    if [[ -z "$final_callback_check" ]] || (( $(echo "$final_callback_check < 0.5" | bc -l 2>/dev/null || echo "1") )); then
         error "回调地址余额不足 ($final_callback_balance SOL)，无法运行节点"
         return 1
     fi
@@ -1452,8 +1545,6 @@ EOF
     # 创建 Docker Compose 配置
     log "创建 Docker Compose 配置..."
     cat > docker-compose.yml << EOF
-version: '3.8'
-
 services:
   arx-node:
     image: arcium/arx-node
@@ -1511,7 +1602,8 @@ EOF
         success "运行端口: $final_port"
         success "集群 Offset: $cluster_offset"
         log "函数执行完成，返回结果: $node_offset:$actual_port_used"
-        echo "$node_offset:$actual_port_used"
+        # 确保只输出格式化的结果到 stdout，错误信息输出到 stderr
+        echo "$node_offset:$actual_port_used" >&1
         return 0
     else
         error "节点启动失败，请检查日志"
@@ -1806,22 +1898,77 @@ main() {
     if type setup_arx_node >/dev/null 2>&1; then
         log "调用 setup_arx_node 函数，集群 Offset: $CLUSTER_OFFSET"
 
-        # 执行函数
-        if node_offset_result=$(setup_arx_node "$CLUSTER_OFFSET"); then
+        # 执行函数，捕获返回值
+        # 使用临时文件来分离输出和返回值
+        local temp_output=$(mktemp)
+        local temp_result=$(mktemp)
+        
+        # 执行函数，将所有输出保存到临时文件，最后一行格式化的结果保存到另一个文件
+        if setup_arx_node "$CLUSTER_OFFSET" > "$temp_output" 2>&1; then
+            # 从输出中提取格式化的结果（格式：数字:数字）
+            node_offset_result=$(grep -E '^[0-9]+:[0-9]+$' "$temp_output" | tail -1)
+            
+            # 显示函数输出（除了最后一行格式化的结果）
+            grep -vE '^[0-9]+:[0-9]+$' "$temp_output" || true
+            
+            # 如果没找到格式化的结果，尝试从文件读取
+            if [[ -z "$node_offset_result" ]]; then
+                warning "无法从返回值解析节点信息，尝试从节点目录读取..."
+                if [[ -f "$NODE_DIR/.current_offset" ]]; then
+                    source "$NODE_DIR/.current_offset"
+                    if [[ -n "$node_offset" ]]; then
+                        # 尝试从 docker-compose.yml 读取端口
+                        local port_from_config="8080"
+                        if [[ -f "$NODE_DIR/docker-compose.yml" ]]; then
+                            local extracted_port=$(grep -oE '"[0-9]+:8080"' "$NODE_DIR/docker-compose.yml" | head -1 | cut -d'"' -f2 | cut -d':' -f1)
+                            if [[ -n "$extracted_port" ]]; then
+                                port_from_config="$extracted_port"
+                            fi
+                        fi
+                        node_offset_result="$node_offset:$port_from_config"
+                        log "从文件恢复节点 Offset: $node_offset, 端口: $port_from_config"
+                    fi
+                fi
+            fi
+            
             log "✅ setup_arx_node 函数执行成功"
+            
+            # 验证返回结果格式
+            if [[ -z "$node_offset_result" ]] || ! echo "$node_offset_result" | grep -qE '^[0-9]+:[0-9]+$'; then
+                error "无法获取节点 Offset 和端口信息"
+                rm -f "$temp_output" "$temp_result"
+                exit 1
+            fi
+            
             log "解析返回结果: $node_offset_result"
 
             # 解析返回的节点 Offset 和端口
             IFS=':' read -r node_offset actual_port <<< "$node_offset_result"
             log "解析得到 - 节点 Offset: $node_offset, 实际端口: $actual_port"
             
+            # 切换到节点目录读取密钥文件
+            cd "$NODE_DIR" || {
+                error "无法进入节点目录: $NODE_DIR"
+                exit 1
+            }
+            
             log "获取节点公钥..."
-            local node_pubkey=$(solana-keygen pubkey node-keypair.json)
-            log "节点地址: $node_pubkey"
+            if [[ -f "node-keypair.json" ]]; then
+                local node_pubkey=$(solana-keygen pubkey node-keypair.json 2>/dev/null || echo "")
+                log "节点地址: $node_pubkey"
+            else
+                error "未找到 node-keypair.json 文件"
+                exit 1
+            fi
             
             log "获取回调地址公钥..."
-            local callback_pubkey=$(solana-keygen pubkey callback-kp.json)
-            log "回调地址: $callback_pubkey"
+            if [[ -f "callback-kp.json" ]]; then
+                local callback_pubkey=$(solana-keygen pubkey callback-kp.json 2>/dev/null || echo "")
+                log "回调地址: $callback_pubkey"
+            else
+                error "未找到 callback-kp.json 文件"
+                exit 1
+            fi
             
             log "调用 show_node_info 显示节点信息..."
             show_node_info "$node_offset" "$node_pubkey" "$callback_pubkey" "$actual_port"
@@ -1829,6 +1976,11 @@ main() {
             log "🎉 节点部署流程全部完成！"
         else
             local exit_code=$?
+            # 显示错误输出
+            if [[ -f "$temp_output" ]]; then
+                cat "$temp_output" >&2
+                rm -f "$temp_output" "$temp_result"
+            fi
             error "❌ 节点部署失败，setup_arx_node 函数返回非零状态"
             error "请检查上面的错误信息"
             exit 1
