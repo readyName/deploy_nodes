@@ -105,6 +105,15 @@ wait_for_balance() {
     return 1
 }
 
+# 获取集群所有者地址
+get_owner_address() {
+    if [[ ! -f "$OWNER_KEY_PATH" ]]; then
+        error "未找到集群所有者密钥文件: $OWNER_KEY_PATH"
+        return 1
+    fi
+    solana address --keypair "$OWNER_KEY_PATH"
+}
+
 # 确保集群所有者余额充足（失败将无限重试领水）
 ensure_owner_balance() {
     local required_balance=${1:-$OWNER_BALANCE_TARGET}
@@ -119,6 +128,7 @@ ensure_owner_balance() {
 
     while true; do
         local current_balance=$(get_address_balance "$owner_address")
+        success "集群所有者当前余额: $current_balance SOL"
         if (( $(echo "$current_balance >= $required_balance" | bc -l) )); then
             success "集群所有者余额充足：$current_balance SOL (目标 $required_balance SOL)"
             return 0
