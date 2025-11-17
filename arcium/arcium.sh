@@ -4,6 +4,7 @@
 # 专注运行 Arx 验证节点
 
 set -e
+set -o pipefail
 
 # 颜色定义 - 修复版本
 RED='\033[0;31m'
@@ -1984,18 +1985,12 @@ main() {
     if type setup_arx_node >/dev/null 2>&1; then
         log "调用 setup_arx_node 函数，集群 Offset: $CLUSTER_OFFSET"
 
-        # 执行函数，捕获返回值
-        # 使用临时文件来分离输出和返回值
+        # 执行函数，捕获返回值并实时输出日志
         local temp_output=$(mktemp)
-        local temp_result=$(mktemp)
         
-        # 执行函数，将所有输出保存到临时文件，最后一行格式化的结果保存到另一个文件
-        if setup_arx_node "$CLUSTER_OFFSET" > "$temp_output" 2>&1; then
+        if setup_arx_node "$CLUSTER_OFFSET" 2>&1 | tee "$temp_output"; then
             # 从输出中提取格式化的结果（格式：数字:数字）
             node_offset_result=$(grep -E '^[0-9]+:[0-9]+$' "$temp_output" | tail -1)
-            
-            # 显示函数输出（除了最后一行格式化的结果）
-            grep -vE '^[0-9]+:[0-9]+$' "$temp_output" || true
             
             # 如果没找到格式化的结果，尝试从文件读取
             if [[ -z "$node_offset_result" ]]; then
@@ -2022,7 +2017,7 @@ main() {
             # 验证返回结果格式
             if [[ -z "$node_offset_result" ]] || ! echo "$node_offset_result" | grep -qE '^[0-9]+:[0-9]+$'; then
                 error "无法获取节点 Offset 和端口信息"
-                rm -f "$temp_output" "$temp_result"
+                rm -f "$temp_output"
                 exit 1
             fi
             
@@ -2062,14 +2057,11 @@ main() {
             # 显示所有地址和私钥
             show_all_keys
             
+            rm -f "$temp_output"
             log "🎉 节点部署流程全部完成！"
         else
             local exit_code=$?
-            # 显示错误输出
-            if [[ -f "$temp_output" ]]; then
-                cat "$temp_output" >&2
-                rm -f "$temp_output" "$temp_result"
-            fi
+            rm -f "$temp_output"
             error "❌ 节点部署失败，setup_arx_node 函数返回非零状态"
             error "请检查上面的错误信息"
             exit 1
