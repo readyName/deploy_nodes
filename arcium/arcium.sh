@@ -39,7 +39,7 @@ CLUSTER_OFFSET=${CLUSTER_OFFSET:-""}
 NODE_DIR="$HOME/arcium-node-setup"
 CLUSTER_DIR="$HOME/arcium-cluster-setup"
 OWNER_KEY_PATH="$CLUSTER_DIR/cluster-owner-keypair.json"
-OWNER_BALANCE_TARGET=${OWNER_BALANCE_TARGET:-8}
+OWNER_BALANCE_TARGET=${OWNER_BALANCE_TARGET:-0.1}
 NODE_FUNDING_TARGET=${NODE_FUNDING_TARGET:-4}
 CALLBACK_FUNDING_TARGET=${CALLBACK_FUNDING_TARGET:-1}
 
@@ -129,8 +129,8 @@ ensure_owner_balance() {
     while true; do
         local current_balance=$(get_address_balance "$owner_address")
         success "集群所有者当前余额: $current_balance SOL"
-        if (( $(echo "$current_balance >= $required_balance" | bc -l) )); then
-            success "集群所有者余额充足：$current_balance SOL (目标 $required_balance SOL)"
+        if (( $(echo "$current_balance > 0" | bc -l) )); then
+            success "集群所有者已有余额，跳过领水"
             return 0
         fi
 
@@ -173,7 +173,11 @@ transfer_from_owner() {
     owner_address=$(solana address --keypair "$owner_key")
     local required_balance=$(echo "$amount + 0.5" | bc)
 
-    ensure_owner_balance "$required_balance" || return 1
+    ensure_owner_balance || :
+    local owner_balance=$(get_address_balance "$owner_address")
+    if (( $(echo "$owner_balance < $required_balance" | bc -l) )); then
+        warning "集群所有者余额 ($owner_balance SOL) 可能不足以转账 $amount SOL"
+    fi
 
     log "从集群所有者向 $label 转账 $amount SOL..."
     if solana transfer "$target_address" "$amount" --keypair "$owner_key" --url "$RPC_ENDPOINT" --allow-unfunded-recipient 2>/dev/null; then
@@ -1146,8 +1150,8 @@ setup_arx_node() {
     local node_balance=$(get_address_balance "$node_pubkey")
     success "节点地址当前余额: $node_balance SOL"
     
-    if (( $(echo "$node_balance < 3.5" | bc -l) )); then
-        log "节点地址余额不足，将由集群所有者转账补充..."
+    if (( $(echo "$node_balance <= 0" | bc -l) )); then
+        log "节点地址余额为0，将由集群所有者转账补充..."
         if transfer_from_owner "$node_pubkey" "$NODE_FUNDING_TARGET" "节点地址"; then
             node_balance=$(get_address_balance "$node_pubkey")
             success "节点地址已获得注资，当前余额: $node_balance SOL"
@@ -1160,8 +1164,8 @@ setup_arx_node() {
     node_balance=$(get_address_balance "$node_pubkey")
     success "注资后节点地址余额: $node_balance SOL"
     
-    if (( $(echo "$node_balance < 3.5" | bc -l) )); then
-        warning "节点地址余额仍然不足 ($node_balance SOL)，可能影响节点运行，建议联系集群所有者补充资金"
+    if (( $(echo "$node_balance <= 0" | bc -l) )); then
+        warning "节点地址仍没有余额，可能影响节点运行，建议联系集群所有者补充资金"
     fi
     
     # 检查回调地址余额，决定是否需要转账
@@ -1169,8 +1173,8 @@ setup_arx_node() {
     local callback_balance=$(get_address_balance "$callback_pubkey")
     success "回调地址当前余额: $callback_balance SOL"
     
-    if (( $(echo "$callback_balance < 0.5" | bc -l) )); then
-        log "回调地址余额不足，将由集群所有者转账补充..."
+    if (( $(echo "$callback_balance <= 0" | bc -l) )); then
+        log "回调地址余额为0，将由集群所有者转账补充..."
         if transfer_from_owner "$callback_pubkey" "$CALLBACK_FUNDING_TARGET" "回调地址"; then
             callback_balance=$(get_address_balance "$callback_pubkey")
             success "回调地址已获得注资，当前余额: $callback_balance SOL"
@@ -1180,8 +1184,8 @@ setup_arx_node() {
     fi
     
     local final_callback_balance=$(get_address_balance "$callback_pubkey")
-    if (( $(echo "$final_callback_balance < 0.5" | bc -l) )); then
-        error "回调地址余额不足 ($final_callback_balance SOL)，无法运行节点"
+    if (( $(echo "$final_callback_balance <= 0" | bc -l) )); then
+        error "回调地址仍然没有余额，无法运行节点"
         return 1
     fi
     # ========== 步骤 6/9: 初始化节点账户 ==========
