@@ -38,6 +38,10 @@ NODE_PORT=${NODE_PORT:-8080}
 CLUSTER_OFFSET=${CLUSTER_OFFSET:-""}
 NODE_DIR="$HOME/arcium-node-setup"
 CLUSTER_DIR="$HOME/arcium-cluster-setup"
+OWNER_KEY_PATH="$CLUSTER_DIR/cluster-owner-keypair.json"
+OWNER_BALANCE_TARGET=${OWNER_BALANCE_TARGET:-8}
+NODE_FUNDING_TARGET=${NODE_FUNDING_TARGET:-4}
+CALLBACK_FUNDING_TARGET=${CALLBACK_FUNDING_TARGET:-1}
 
 # 检查命令是否存在
 check_cmd() {
@@ -66,6 +70,110 @@ check_port_availability() {
     fi
     success "端口 $port 可用"
     return 0
+}
+
+# 获取地址余额（返回纯数字字符串）
+get_address_balance() {
+    local address=$1
+    local output=$(solana balance "$address" --url "$RPC_ENDPOINT" 2>/dev/null || echo "0")
+    local numeric=$(echo "$output" | grep -oE '[0-9]+\.?[0-9]*' | head -1)
+    if [[ -z "$numeric" ]]; then
+        numeric="0"
+    fi
+    echo "$numeric"
+}
+
+# 等待地址余额达到目标
+wait_for_balance() {
+    local address=$1
+    local target_balance=$2
+    local label=${3:-"目标地址"}
+    local max_checks=${4:-20}
+    local check=0
+
+    while [ $check -lt $max_checks ]; do
+        sleep 5
+        local current_balance=$(get_address_balance "$address")
+        if (( $(echo "$current_balance >= $target_balance" | bc -l) )); then
+            success "$label 余额已达到 $current_balance SOL"
+            return 0
+        fi
+        info "等待 $label 余额到账... ($((check + 1))/$max_checks) 当前余额: $current_balance SOL"
+        check=$((check + 1))
+    done
+    warning "$label 余额仍低于目标值 $target_balance SOL"
+    return 1
+}
+
+# 确保集群所有者余额充足（失败将无限重试领水）
+ensure_owner_balance() {
+    local required_balance=${1:-$OWNER_BALANCE_TARGET}
+    local owner_key="$OWNER_KEY_PATH"
+
+    if [[ ! -f "$owner_key" ]]; then
+        error "未找到集群所有者密钥文件: $owner_key"
+        return 1
+    fi
+
+    local owner_address=$(solana address --keypair "$owner_key")
+
+    while true; do
+        local current_balance=$(get_address_balance "$owner_address")
+        if (( $(echo "$current_balance >= $required_balance" | bc -l) )); then
+            success "集群所有者余额充足：$current_balance SOL (目标 $required_balance SOL)"
+            return 0
+        fi
+
+        warning "集群所有者余额不足 ($current_balance SOL)，需要至少 $required_balance SOL，开始无限重试领水..."
+        local attempt=0
+        while true; do
+            attempt=$((attempt + 1))
+            log "尝试为集群所有者申请空投 (第 $attempt 次)..."
+            if solana airdrop 5 "$owner_address" -u devnet 2>/dev/null; then
+                success "空投请求已提交，等待到账..."
+                break
+            else
+                warning "空投失败，10秒后重试..."
+                sleep 10
+            fi
+        done
+
+        wait_for_balance "$owner_address" "$required_balance" "集群所有者" 24 || true
+    done
+}
+
+# 从集群所有者向目标地址转账
+transfer_from_owner() {
+    local target_address=$1
+    local amount=$2
+    local label=${3:-"目标地址"}
+    local owner_key="$OWNER_KEY_PATH"
+
+    if [[ -z "$target_address" || -z "$amount" ]]; then
+        error "转账参数缺失"
+        return 1
+    fi
+
+    if [[ ! -f "$owner_key" ]]; then
+        error "未找到集群所有者密钥文件: $owner_key"
+        return 1
+    fi
+
+    local owner_address
+    owner_address=$(solana address --keypair "$owner_key")
+    local required_balance=$(echo "$amount + 0.5" | bc)
+
+    ensure_owner_balance "$required_balance" || return 1
+
+    log "从集群所有者向 $label 转账 $amount SOL..."
+    if solana transfer "$target_address" "$amount" --keypair "$owner_key" --url "$RPC_ENDPOINT" --allow-unfunded-recipient 2>/dev/null; then
+        success "已向 $label 转账 $amount SOL，等待到账..."
+        wait_for_balance "$target_address" "$amount" "$label" 20 || true
+        return 0
+    else
+        error "向 $label 转账失败，请检查网络或账户状态"
+        return 1
+    fi
 }
 
 # 安装依赖
@@ -333,67 +441,11 @@ create_cluster_owner_keypair() {
 check_and_airdrop() {
     log "检查集群所有者余额..."
     
-    local owner_address=$(solana address --keypair cluster-owner-keypair.json)
-    local balance_output=$(solana balance $owner_address --url "$RPC_ENDPOINT" 2>/dev/null || echo "0 SOL")
-    local balance=$(echo "$balance_output" | cut -d' ' -f1)
-    
-    success "当前余额: $balance SOL"
-    
-    # 简化余额检查（避免依赖 bc）
-    if [[ "$balance" == "0" ]] || [[ "$balance" == "0.0" ]] || [[ "$balance_output" == *"error"* ]]; then
-        log "余额不足或无法获取，获取空投..."
-        
-        # 自动重试空投，无限重试直到成功
-        local airdrop_retry=0
-        local airdrop_success=false
-        
-        while true; do
-            airdrop_retry=$((airdrop_retry + 1))
-            log "尝试获取空投 (第 $airdrop_retry 次)..."
-            
-            if solana airdrop 5 $owner_address -u devnet 2>/dev/null; then
-                success "空投请求已提交，等待到账..."
-                airdrop_success=true
-                break
-            else
-                warning "空投请求失败，10秒后重试..."
-                sleep 10
-            fi
-        done
-        
-        if [ "$airdrop_success" = true ]; then
-            # 等待余额到账
-            local max_checks=8
-            local check_count=0
-            
-            while [ $check_count -lt $max_checks ]; do
-                sleep 8
-                balance_output=$(solana balance $owner_address --url "$RPC_ENDPOINT" 2>/dev/null || echo "0 SOL")
-                balance=$(echo "$balance_output" | cut -d' ' -f1)
-                check_count=$((check_count + 1))
-                
-                if [[ "$balance" != "0" ]] && [[ "$balance" != "0.0" ]]; then
-                    success "余额到账: $balance SOL"
-                    break
-                else
-                    info "等待余额到账... ($check_count/$max_checks)"
-                fi
-            done
-            
-            if [[ "$balance" == "0" ]] || [[ "$balance" == "0.0" ]]; then
-                warning "空投可能未到账，当前余额: $balance SOL"
-                info "继续等待或可能需要手动获取空投: https://faucet.solana.com/"
-                info "地址: $owner_address"
-            fi
-        else
-            # 理论上不会到达这里，因为会无限重试直到成功
-            error "空投请求失败"
-            warning "请手动获取空投: https://faucet.solana.com/"
-            info "集群所有者地址: $owner_address"
-            read -p "获取空投后按回车键继续..."
-        fi
+    if ensure_owner_balance "$OWNER_BALANCE_TARGET"; then
+        success "集群所有者资金准备就绪"
     else
-        success "余额充足，跳过空投"
+        error "无法确保集群所有者余额，请检查网络或账户状态"
+        exit 1
     fi
 }
 
@@ -1081,274 +1133,44 @@ setup_arx_node() {
     # 步骤 5/9: 检查余额和领水
     log "步骤 5/9: 检查余额和领水"
     log "检查节点地址余额..."
-    local balance_output=$(solana balance $node_pubkey --url "$RPC_ENDPOINT" 2>/dev/null || echo "")
-    local node_balance="0"
-    
-    # 安全地解析余额
-    if [[ -n "$balance_output" ]]; then
-        # 尝试提取数字部分
-        node_balance=$(echo "$balance_output" | grep -oE '[0-9]+\.?[0-9]*' | head -1)
-        if [[ -z "$node_balance" ]]; then
-            node_balance="0"
-        fi
-    fi
-    
-    # 验证余额是否为有效数字
-    if ! echo "$node_balance" | grep -qE '^[0-9]+\.?[0-9]*$'; then
-        node_balance="0"
-    fi
-    
+    local node_balance=$(get_address_balance "$node_pubkey")
     success "节点地址当前余额: $node_balance SOL"
     
-    # 如果节点地址余额小于 2.5 SOL，则尝试多种方式获取资金
-    # 使用更安全的数值比较
-    local balance_check=$(echo "$node_balance" | bc -l 2>/dev/null || echo "0")
-    if [[ -z "$balance_check" ]] || (( $(echo "$balance_check < 2.5" | bc -l 2>/dev/null || echo "1") )); then
-        log "节点地址余额不足，开始获取资金..."
-        local funding_success=false
-        
-        # 方法1: 尝试官方领水（无限重试直到成功）
-        log "尝试官方领水..."
-        local airdrop_retry=0
-        
-        while true; do
-            airdrop_retry=$((airdrop_retry + 1))
-            log "尝试获取空投 (第 $airdrop_retry 次)..."
-            
-            if solana airdrop 5 $node_pubkey -u devnet 2>/dev/null; then
-                success "官方领水成功，等待到账..."
-                funding_success=true
-                break
-            else
-                warning "空投请求失败，10秒后重试..."
-                sleep 10
-            fi
-        done
-        
-        # 理论上不会到达这里，因为会无限重试直到成功
-        if [ "$funding_success" != true ]; then
-            warning "官方领水失败，尝试集群转账..."
-            
-            # 方法2: 从集群所有者转账
-            local CLUSTER_DIR="$HOME/arcium-cluster-setup"
-            if [[ -f "$CLUSTER_DIR/cluster-owner-keypair.json" ]]; then
-                log "从集群所有者给节点转账 4 SOL..."
-                
-                # 检查集群所有者余额
-                local cluster_owner_address=$(solana address --keypair "$CLUSTER_DIR/cluster-owner-keypair.json")
-                local cluster_balance_output=$(solana balance $cluster_owner_address --url "$RPC_ENDPOINT" 2>/dev/null || echo "")
-                local cluster_balance="0"
-                
-                # 安全地解析余额
-                if [[ -n "$cluster_balance_output" ]]; then
-                    cluster_balance=$(echo "$cluster_balance_output" | grep -oE '[0-9]+\.?[0-9]*' | head -1)
-                    if [[ -z "$cluster_balance" ]]; then
-                        cluster_balance="0"
-                    fi
-                fi
-                
-                # 验证余额是否为有效数字
-                if ! echo "$cluster_balance" | grep -qE '^[0-9]+\.?[0-9]*$'; then
-                    cluster_balance="0"
-                fi
-                
-                success "集群所有者余额: $cluster_balance SOL"
-                
-                local cluster_balance_check=$(echo "$cluster_balance" | bc -l 2>/dev/null || echo "0")
-                if [[ -n "$cluster_balance_check" ]] && (( $(echo "$cluster_balance_check >= 4.5" | bc -l 2>/dev/null || echo "0") )); then
-                    if solana transfer $node_pubkey 4 --keypair "$CLUSTER_DIR/cluster-owner-keypair.json" --url "$RPC_ENDPOINT" --allow-unfunded-recipient 2>/dev/null; then
-                        success "集群转账成功！"
-                        funding_success=true
-                    else
-                        error "集群转账失败"
-                    fi
-                else
-                    warning "集群所有者余额不足 ($cluster_balance SOL)，无法转账"
-                fi
-            else
-                warning "未找到集群所有者密钥文件"
-            fi
-        fi
-        
-        # 等待资金到账
-        if [ "$funding_success" = true ]; then
-            success "资金请求已提交，等待到账..."
-            
-            # 等待并检查余额
-            local max_checks=15
-            local check_count=0
-            
-            while [ $check_count -lt $max_checks ]; do
-                sleep 10
-                balance_output=$(solana balance $node_pubkey --url "$RPC_ENDPOINT" 2>/dev/null || echo "")
-                if [[ -n "$balance_output" ]]; then
-                    node_balance=$(echo "$balance_output" | grep -oE '[0-9]+\.?[0-9]*' | head -1)
-                    if [[ -z "$node_balance" ]] || ! echo "$node_balance" | grep -qE '^[0-9]+\.?[0-9]*$'; then
-                        node_balance="0"
-                    fi
-                else
-                    node_balance="0"
-                fi
-                check_count=$((check_count + 1))
-                
-                local balance_check=$(echo "$node_balance" | bc -l 2>/dev/null || echo "0")
-                if [[ -n "$balance_check" ]] && (( $(echo "$balance_check >= 3.5" | bc -l 2>/dev/null || echo "0") )); then
-                    success "节点地址资金到账: $node_balance SOL"
-                    break
-                else
-                    info "等待资金到账... ($check_count/$max_checks) 当前余额: $node_balance SOL"
-                fi
-            done
-            
-            local final_balance_check=$(echo "$node_balance" | bc -l 2>/dev/null || echo "0")
-            if [[ -z "$final_balance_check" ]] || (( $(echo "$final_balance_check < 3.5" | bc -l 2>/dev/null || echo "1") )); then
-                warning "资金未完全到账，当前余额: $node_balance SOL"
-                info "可能因网络延迟，继续等待或需要手动处理"
-            fi
+    if (( $(echo "$node_balance < 3.5" | bc -l) )); then
+        log "节点地址余额不足，将由集群所有者转账补充..."
+        if transfer_from_owner "$node_pubkey" "$NODE_FUNDING_TARGET" "节点地址"; then
+            node_balance=$(get_address_balance "$node_pubkey")
+            success "节点地址已获得注资，当前余额: $node_balance SOL"
         else
-            # 所有自动方法都失败，提示手动领水
-            warning "所有自动获取资金方法都失败了"
-            info "请手动访问以下网站领水:"
-            info "https://faucet.solana.com"
-            info "节点地址: $node_pubkey"
-            info "领取至少 5 SOL 后按回车键继续..."
-            read -r </dev/tty
-            
-            # 手动领水后等待余额到账
-            log "等待手动领水到账..."
-            local max_waits=30
-            local wait_count=0
-            
-            while [ $wait_count -lt $max_waits ]; do
-                sleep 20
-                balance_output=$(solana balance $node_pubkey --url "$RPC_ENDPOINT" 2>/dev/null || echo "")
-                if [[ -n "$balance_output" ]]; then
-                    node_balance=$(echo "$balance_output" | grep -oE '[0-9]+\.?[0-9]*' | head -1)
-                    if [[ -z "$node_balance" ]] || ! echo "$node_balance" | grep -qE '^[0-9]+\.?[0-9]*$'; then
-                        node_balance="0"
-                    fi
-                else
-                    node_balance="0"
-                fi
-                wait_count=$((wait_count + 1))
-                
-                echo "检查余额... ($wait_count/$max_waits) 当前余额: $node_balance SOL" >&2
-                
-                local balance_check=$(echo "$node_balance" | bc -l 2>/dev/null || echo "0")
-                if [[ -n "$balance_check" ]] && (( $(echo "$balance_check >= 3.5" | bc -l 2>/dev/null || echo "0") )); then
-                    success "领水到账: $node_balance SOL"
-                    break
-                fi
-            done
-            
-            local final_balance_check=$(echo "$node_balance" | bc -l 2>/dev/null || echo "0")
-            if [[ -z "$final_balance_check" ]] || (( $(echo "$final_balance_check < 3.5" | bc -l 2>/dev/null || echo "1") )); then
-                warning "领水未到账，当前余额: $node_balance SOL"
-                info "请确认已成功领水，按回车键强制继续..."
-                read -r </dev/tty
-            fi
+            warning "自动注资节点地址失败，请稍后手动检查"
         fi
-    else
-        success "节点地址余额充足，跳过领水"
     fi
     
-    # === 重新检查余额（领水后可能发生变化）===
-    balance_output=$(solana balance $node_pubkey --url "$RPC_ENDPOINT" 2>/dev/null || echo "")
-    if [[ -n "$balance_output" ]]; then
-        node_balance=$(echo "$balance_output" | grep -oE '[0-9]+\.?[0-9]*' | head -1)
-        if [[ -z "$node_balance" ]] || ! echo "$node_balance" | grep -qE '^[0-9]+\.?[0-9]*$'; then
-            node_balance="0"
-        fi
-    else
-        node_balance="0"
-    fi
-    success "领水后节点地址最终余额: $node_balance SOL"
+    # === 最终确认节点余额 ===
+    node_balance=$(get_address_balance "$node_pubkey")
+    success "注资后节点地址余额: $node_balance SOL"
     
-    # 如果节点余额仍然不足，给出警告但继续
-    local final_balance_check=$(echo "$node_balance" | bc -l 2>/dev/null || echo "0")
-    if [[ -z "$final_balance_check" ]] || (( $(echo "$final_balance_check < 3.5" | bc -l 2>/dev/null || echo "1") )); then
-        warning "节点地址余额仍然不足 ($node_balance SOL)，可能影响节点运行"
-        info "建议手动补充资金或联系集群所有者"
+    if (( $(echo "$node_balance < 3.5" | bc -l) )); then
+        warning "节点地址余额仍然不足 ($node_balance SOL)，可能影响节点运行，建议联系集群所有者补充资金"
     fi
     
     # 检查回调地址余额，决定是否需要转账
     log "检查回调地址余额..."
-    local callback_balance_output=$(solana balance $callback_pubkey --url "$RPC_ENDPOINT" 2>/dev/null || echo "")
-    local callback_balance="0"
-    
-    # 安全地解析余额
-    if [[ -n "$callback_balance_output" ]]; then
-        callback_balance=$(echo "$callback_balance_output" | grep -oE '[0-9]+\.?[0-9]*' | head -1)
-        if [[ -z "$callback_balance" ]] || ! echo "$callback_balance" | grep -qE '^[0-9]+\.?[0-9]*$'; then
-            callback_balance="0"
-        fi
-    fi
-    
+    local callback_balance=$(get_address_balance "$callback_pubkey")
     success "回调地址当前余额: $callback_balance SOL"
     
-    # 如果回调地址余额小于 0.5 SOL，且节点地址有足够余额，则转账
-    local callback_balance_check=$(echo "$callback_balance" | bc -l 2>/dev/null || echo "0")
-    if [[ -z "$callback_balance_check" ]] || (( $(echo "$callback_balance_check < 0.5" | bc -l 2>/dev/null || echo "1") )); then
-        # 调整判断条件：节点余额至少需要 1 SOL（转账 1 SOL + gas 费）
-        local node_balance_check=$(echo "$node_balance" | bc -l 2>/dev/null || echo "0")
-        if [[ -n "$node_balance_check" ]] && (( $(echo "$node_balance_check >= 1.1" | bc -l 2>/dev/null || echo "0") )); then
-            log "回调地址余额不足，从节点地址转账 1 SOL..."
-            if solana transfer $callback_pubkey 1 --keypair node-keypair.json --url "$RPC_ENDPOINT" --allow-unfunded-recipient 2>/dev/null; then
-                success "转账成功，等待回调地址到账..."
-                
-                # 等待回调地址到账
-                local callback_checks=0
-                log "开始等待回调地址到账，最大检查次数: 5"
-                while [ $callback_checks -lt 5 ]; do
-                    sleep 5
-                    callback_balance_output=$(solana balance $callback_pubkey --url "$RPC_ENDPOINT" 2>/dev/null || echo "")
-                    if [[ -n "$callback_balance_output" ]]; then
-                        callback_balance=$(echo "$callback_balance_output" | grep -oE '[0-9]+\.?[0-9]*' | head -1)
-                        if [[ -z "$callback_balance" ]] || ! echo "$callback_balance" | grep -qE '^[0-9]+\.?[0-9]*$'; then
-                            callback_balance="0"
-                        fi
-                    else
-                        callback_balance="0"
-                    fi
-                    callback_checks=$((callback_checks + 1))
-                    
-                    local callback_balance_check=$(echo "$callback_balance" | bc -l 2>/dev/null || echo "0")
-                    if [[ -n "$callback_balance_check" ]] && (( $(echo "$callback_balance_check >= 0.5" | bc -l 2>/dev/null || echo "0") )); then
-                        success "回调地址资金到位: $callback_balance SOL"
-                        break
-                    else
-                        info "等待回调地址到账... ($callback_checks/5) 当前余额: $callback_balance SOL"
-                    fi
-                done
-            else
-                warning "转账失败，请手动处理"
-                info "手动执行: solana transfer $callback_pubkey 1 --keypair node-keypair.json --url \"$RPC_ENDPOINT\" --allow-unfunded-recipient"
-                info "按回车键继续..."
-                read -r
-            fi
+    if (( $(echo "$callback_balance < 0.5" | bc -l) )); then
+        log "回调地址余额不足，将由集群所有者转账补充..."
+        if transfer_from_owner "$callback_pubkey" "$CALLBACK_FUNDING_TARGET" "回调地址"; then
+            callback_balance=$(get_address_balance "$callback_pubkey")
+            success "回调地址已获得注资，当前余额: $callback_balance SOL"
         else
-            warning "节点地址余额不足 ($node_balance SOL)，无法给回调地址转账"
-            info "回调地址需要至少 0.5 SOL 才能运行节点"
-            # 这里不返回错误，让用户决定是否继续
-            info "按回车键继续（节点可能无法正常运行）..."
-            read -r
-        fi
-    else
-        success "回调地址余额充足，跳过转账"
-    fi
-    
-    # 最终检查回调地址余额
-    callback_balance_output=$(solana balance $callback_pubkey --url "$RPC_ENDPOINT" 2>/dev/null || echo "")
-    local final_callback_balance="0"
-    if [[ -n "$callback_balance_output" ]]; then
-        final_callback_balance=$(echo "$callback_balance_output" | grep -oE '[0-9]+\.?[0-9]*' | head -1)
-        if [[ -z "$final_callback_balance" ]] || ! echo "$final_callback_balance" | grep -qE '^[0-9]+\.?[0-9]*$'; then
-            final_callback_balance="0"
+            warning "自动注资回调地址失败，请稍后手动检查"
         fi
     fi
     
-    local final_callback_check=$(echo "$final_callback_balance" | bc -l 2>/dev/null || echo "0")
-    if [[ -z "$final_callback_check" ]] || (( $(echo "$final_callback_check < 0.5" | bc -l 2>/dev/null || echo "1") )); then
+    local final_callback_balance=$(get_address_balance "$callback_pubkey")
+    if (( $(echo "$final_callback_balance < 0.5" | bc -l) )); then
         error "回调地址余额不足 ($final_callback_balance SOL)，无法运行节点"
         return 1
     fi
