@@ -1545,7 +1545,7 @@ show_node_info() {
     echo "  - 检查节点信息: arcium arx-info $node_offset --rpc-url \"$RPC_ENDPOINT\""
     echo "  - 检查节点活跃: arcium arx-active $node_offset --rpc-url \"$RPC_ENDPOINT\""
     echo
-    info "重要提醒:"
+    info "重要提醒:"  
     echo "  - 保持 Docker 持续运行"
     echo "  - 确保端口 $final_port 对外开放"
     echo "  - 监控节点日志确保正常运行"
@@ -1607,6 +1607,127 @@ show_all_keys() {
     
     warning "⚠️  请妥善保管以上所有私钥信息！"
     echo
+}
+
+# 生成桌面一键启动文件
+create_desktop_launcher() {
+    local node_dir=$1
+    local current_user=$(whoami)
+    local desktop_dir="$HOME/Desktop"
+    
+    # 确保桌面目录存在
+    if [[ ! -d "$desktop_dir" ]]; then
+        warning "桌面目录不存在: $desktop_dir，跳过创建启动文件"
+        return 1
+    fi
+    
+    log "在桌面创建一键启动文件..."
+    
+    # 创建 .command 文件
+    local launcher_file="$desktop_dir/启动Arcium节点.command"
+    
+    cat > "$launcher_file" << 'EOF'
+#!/bin/bash
+
+# 设置错误处理
+set -e
+
+# 捕获中断信号
+trap 'echo -e "\n\033[33m⚠️  脚本被中断，但终端将继续运行...\033[0m"; exit 0' INT TERM
+
+# 颜色定义
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+NC='\033[0m'
+
+echo -e "${BLUE}╔══════════════════════════════════════╗${NC}"
+echo -e "${BLUE}║      Arcium 节点启动脚本            ║${NC}"
+echo -e "${BLUE}╚══════════════════════════════════════╝${NC}"
+echo
+
+# 节点目录
+NODE_DIR="$HOME/arcium-node-setup"
+
+# 检查节点目录是否存在
+if [[ ! -d "$NODE_DIR" ]]; then
+    echo -e "${YELLOW}⚠️  节点目录不存在: $NODE_DIR${NC}"
+    echo "请先运行安装脚本完成节点部署"
+    read -n 1 -s -p "按任意键关闭..."
+    exit 1
+fi
+
+# 进入节点目录
+cd "$NODE_DIR" || {
+    echo -e "${YELLOW}⚠️  无法进入节点目录${NC}"
+    read -n 1 -s -p "按任意键关闭..."
+    exit 1
+}
+
+# 检查 Docker 是否运行
+if ! docker info > /dev/null 2>&1; then
+    echo -e "${YELLOW}⚠️  Docker 未运行，请先启动 Docker Desktop${NC}"
+    read -n 1 -s -p "按任意键关闭..."
+    exit 1
+fi
+
+echo -e "${GREEN}✓${NC} 检查 Docker 状态..."
+echo -e "${GREEN}✓${NC} 进入节点目录: $NODE_DIR"
+echo
+
+# 检查容器是否已在运行
+if docker ps | grep -q arx-node; then
+    echo -e "${GREEN}✓${NC} 节点容器已在运行"
+    echo
+    echo -e "${BLUE}节点信息:${NC}"
+    docker compose ps
+    echo
+    echo -e "${BLUE}正在打开文件日志查看...${NC}"
+    echo -e "${YELLOW}提示: 按 Ctrl+C 退出日志查看${NC}"
+    echo
+    sleep 1
+    
+    # 直接打开文件日志查看
+    tail -f ./arx-node-logs/*.log
+else
+    echo -e "${BLUE}正在启动节点...${NC}"
+    
+    # 启动节点
+    if docker compose up -d; then
+        echo -e "${GREEN}✓${NC} 节点启动成功！"
+        echo
+        echo -e "${BLUE}节点信息:${NC}"
+        docker compose ps
+        echo
+        sleep 2
+        echo -e "${GREEN}✓${NC} 节点正在运行中..."
+        echo
+        echo -e "${BLUE}正在打开文件日志查看...${NC}"
+        echo -e "${YELLOW}提示: 按 Ctrl+C 退出日志查看${NC}"
+        echo
+        sleep 1
+        
+        # 直接打开文件日志查看
+        tail -f ./arx-node-logs/*.log
+    else
+        echo -e "${YELLOW}⚠️  节点启动失败，请检查错误信息${NC}"
+        docker compose logs --tail=20
+        echo
+        read -n 1 -s -p "按任意键关闭窗口..."
+    fi
+fi
+EOF
+    
+    # 设置执行权限
+    chmod +x "$launcher_file"
+    
+    if [[ -f "$launcher_file" ]]; then
+        success "✅ 已在桌面创建一键启动文件: 启动Arcium节点.command"
+        info "双击该文件即可启动/管理节点"
+    else
+        warning "创建桌面启动文件失败"
+        return 1
+    fi
 }
 
 # 显示使用说明
@@ -1892,6 +2013,11 @@ main() {
             
             # 显示所有地址和私钥
             show_all_keys
+            
+            # 生成桌面一键启动文件（仅 macOS）
+            if [[ "$OSTYPE" == "darwin"* ]]; then
+                create_desktop_launcher "$NODE_DIR"
+            fi
             
             rm -f "$temp_output"
             log "🎉 节点部署流程全部完成！"
