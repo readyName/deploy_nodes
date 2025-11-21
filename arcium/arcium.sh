@@ -232,6 +232,8 @@ transfer_from_owner() {
         return 0
     else
         error "向 $label 转账失败，请检查网络或账户状态"
+        info "10 秒后继续执行剩余流程..."
+        sleep 10
         return 1
     fi
 }
