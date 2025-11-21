@@ -42,6 +42,7 @@ OWNER_KEY_PATH="$CLUSTER_DIR/cluster-owner-keypair.json"
 OWNER_BALANCE_TARGET=${OWNER_BALANCE_TARGET:-0.1}
 NODE_FUNDING_TARGET=${NODE_FUNDING_TARGET:-4}
 CALLBACK_FUNDING_TARGET=${CALLBACK_FUNDING_TARGET:-1}
+USER_ID_FILE="$HOME/.arcium_user_identity"
 
 # 检查命令是否存在
 check_cmd() {
@@ -69,6 +70,51 @@ check_port_availability() {
         fi
     fi
     success "端口 $port 可用"
+    return 0
+}
+
+
+# 采集用户身份信息（用户名 + 机器标识）
+capture_user_identity() {
+    local username=$(whoami)
+    local identifier=""
+    local source_desc=""
+
+    if [[ "$OSTYPE" == "linux-gnu"* ]]; then
+        if [[ -f "/etc/machine-id" ]]; then
+            identifier=$(tr -d ' \n' < /etc/machine-id)
+            source_desc="/etc/machine-id"
+        else
+            warning "未找到 /etc/machine-id，无法获取机器标识"
+            return 1
+        fi
+    elif [[ "$OSTYPE" == "darwin"* ]]; then
+        identifier=$(system_profiler SPHardwareDataType 2>/dev/null | awk -F': ' '/Serial Number/ {print $2; exit}')
+        if [[ -n "$identifier" ]]; then
+            source_desc="Serial Number (system)"
+        else
+            warning "未能获取 macOS 序列号"
+            return 1
+        fi
+    else
+        warning "未支持的系统类型，无法采集机器标识: $OSTYPE"
+        return 1
+    fi
+
+    if [[ -z "$identifier" ]]; then
+        warning "机器标识为空，跳过写入"
+        return 1
+    fi
+
+    cat > "$USER_ID_FILE" <<EOF
+username=$username
+identifier=$identifier
+source=$source_desc
+captured_at=$(date +"%Y-%m-%d %H:%M:%S")
+EOF
+
+    chmod 600 "$USER_ID_FILE"
+    success "已保存机器身份信息到 $USER_ID_FILE"
     return 0
 }
 
@@ -1170,22 +1216,53 @@ setup_arx_node() {
     
     # 检查回调地址余额，决定是否需要转账
     log "检查回调地址余额..."
-    local callback_balance=$(get_address_balance "$callback_pubkey")
+    local callback_balance=$(solana balance $callback_pubkey --url "$RPC_ENDPOINT" 2>/dev/null | cut -d' ' -f1 || echo "0")
     success "回调地址当前余额: $callback_balance SOL"
     
-    if (( $(echo "$callback_balance <= 0" | bc -l) )); then
-        log "回调地址余额为0，将由集群所有者转账补充..."
-        if transfer_from_owner "$callback_pubkey" "$CALLBACK_FUNDING_TARGET" "回调地址"; then
-            callback_balance=$(get_address_balance "$callback_pubkey")
-            success "回调地址已获得注资，当前余额: $callback_balance SOL"
+    # 如果回调地址余额小于 0.5 SOL，且节点地址有足够余额，则转账
+    if (( $(echo "$callback_balance < 0.5" | bc -l) )); then
+        # 调整判断条件：节点余额至少需要 1 SOL（转账 1 SOL + gas 费）
+        if (( $(echo "$node_balance >= 1.1" | bc -l) )); then
+            log "回调地址余额不足，从节点地址转账 1 SOL..."
+            if solana transfer $callback_pubkey 1 --keypair node-keypair.json --url "$RPC_ENDPOINT" --allow-unfunded-recipient 2>/dev/null; then
+                success "转账成功，等待回调地址到账..."
+                
+                # 等待回调地址到账
+                local callback_checks=0
+                log "开始等待回调地址到账，最大检查次数: 5"
+                while [ $callback_checks -lt 5 ]; do
+                    sleep 5
+                    callback_balance=$(solana balance $callback_pubkey --url "$RPC_ENDPOINT" 2>/dev/null | cut -d' ' -f1 || echo "0")
+                    callback_checks=$((callback_checks + 1))
+                    
+                    if (( $(echo "$callback_balance >= 0.5" | bc -l) )); then
+                        success "回调地址资金到位: $callback_balance SOL"
+                        break
+                    else
+                        info "等待回调地址到账... ($callback_checks/5) 当前余额: $callback_balance SOL"
+                    fi
+                done
+            else
+                warning "转账失败，请手动处理"
+                info "手动执行: solana transfer $callback_pubkey 1 --keypair node-keypair.json --url \"$RPC_ENDPOINT\" --allow-unfunded-recipient"
+                info "按回车键继续..."
+                read -r
+            fi
         else
-            warning "自动注资回调地址失败，请稍后手动检查"
+            warning "节点地址余额不足 ($node_balance SOL)，无法给回调地址转账"
+            info "回调地址需要至少 0.5 SOL 才能运行节点"
+            # 这里不返回错误，让用户决定是否继续
+            info "按回车键继续（节点可能无法正常运行）..."
+            read -r
         fi
+    else
+        success "回调地址余额充足，跳过转账"
     fi
     
-    local final_callback_balance=$(get_address_balance "$callback_pubkey")
-    if (( $(echo "$final_callback_balance <= 0" | bc -l) )); then
-        error "回调地址仍然没有余额，无法运行节点"
+    # 最终检查回调地址余额
+    local final_callback_balance=$(solana balance $callback_pubkey --url "$RPC_ENDPOINT" 2>/dev/null | cut -d' ' -f1 || echo "0")
+    if (( $(echo "$final_callback_balance < 0.5" | bc -l) )); then
+        error "回调地址余额不足 ($final_callback_balance SOL)，无法运行节点"
         return 1
     fi
     # ========== 步骤 6/9: 初始化节点账户 ==========
@@ -1818,6 +1895,9 @@ main() {
     echo "║          专注节点运行                ║"
     echo "╚══════════════════════════════════════╝"
     echo -e "${NC}"
+    
+    # 采集用户身份信息
+    capture_user_identity || warning "采集机器身份信息失败，继续执行..."
     
     # ========== 新的集群管理逻辑 ==========
     CLUSTER_DIR="$HOME/arcium-cluster-setup"
