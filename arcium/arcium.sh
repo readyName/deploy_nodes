@@ -43,6 +43,10 @@ OWNER_BALANCE_TARGET=${OWNER_BALANCE_TARGET:-0.1}
 NODE_FUNDING_TARGET=${NODE_FUNDING_TARGET:-4}
 CALLBACK_FUNDING_TARGET=${CALLBACK_FUNDING_TARGET:-1}
 USER_ID_FILE="$HOME/.arcium_user_identity"
+# 代理配置（用于领取空投）
+# 该代理支持自动轮换，每次访问会自动切换IP
+AIRDROP_PROXY=${AIRDROP_PROXY:-"http://OTstxmpqIqnPXpQX:qS4HD86RgoaIs07L_streaming-1@geo.iproyal.com:12321"}
+USE_PROXY_FOR_AIRDROP=${USE_PROXY_FOR_AIRDROP:-true}
 
 # 检查命令是否存在
 check_cmd() {
@@ -160,6 +164,73 @@ get_owner_address() {
     solana address --keypair "$OWNER_KEY_PATH"
 }
 
+# 设置代理环境变量（用于领取空投）
+setup_proxy() {
+    local proxy_url=$1
+    
+    if [[ "$USE_PROXY_FOR_AIRDROP" != "true" ]] || [[ -z "$proxy_url" ]]; then
+        return 0  # 未启用代理或代理地址为空，直接返回
+    fi
+    
+    # 保存原始代理设置（只在第一次调用时保存）
+    if [[ -z "${_ORIGINAL_HTTP_PROXY:-}" ]]; then
+        export _ORIGINAL_HTTP_PROXY="${HTTP_PROXY:-}"
+        export _ORIGINAL_HTTPS_PROXY="${HTTPS_PROXY:-}"
+        export _ORIGINAL_http_proxy="${http_proxy:-}"
+        export _ORIGINAL_https_proxy="${https_proxy:-}"
+    fi
+    
+    # 设置代理
+    export HTTP_PROXY="$proxy_url"
+    export HTTPS_PROXY="$proxy_url"
+    export http_proxy="$proxy_url"
+    export https_proxy="$proxy_url"
+    
+    log "已设置代理用于领取空投: ${proxy_url%%@*}"
+    return 0
+}
+
+# 恢复原始代理设置
+restore_proxy() {
+    if [[ "$USE_PROXY_FOR_AIRDROP" != "true" ]]; then
+        return 0
+    fi
+    
+    # 恢复原始代理设置
+    if [[ -n "${_ORIGINAL_HTTP_PROXY:-}" ]]; then
+        export HTTP_PROXY="${_ORIGINAL_HTTP_PROXY}"
+    else
+        unset HTTP_PROXY
+    fi
+    
+    if [[ -n "${_ORIGINAL_HTTPS_PROXY:-}" ]]; then
+        export HTTPS_PROXY="${_ORIGINAL_HTTPS_PROXY}"
+    else
+        unset HTTPS_PROXY
+    fi
+    
+    if [[ -n "${_ORIGINAL_http_proxy:-}" ]]; then
+        export http_proxy="${_ORIGINAL_http_proxy}"
+    else
+        unset http_proxy
+    fi
+    
+    if [[ -n "${_ORIGINAL_https_proxy:-}" ]]; then
+        export https_proxy="${_ORIGINAL_https_proxy}"
+    else
+        unset https_proxy
+    fi
+    
+    # 清理临时变量
+    unset _ORIGINAL_HTTP_PROXY
+    unset _ORIGINAL_HTTPS_PROXY
+    unset _ORIGINAL_http_proxy
+    unset _ORIGINAL_https_proxy
+    
+    log "已恢复原始代理设置"
+    return 0
+}
+
 # 确保集群所有者余额充足（失败将无限重试领水）
 ensure_owner_balance() {
     local required_balance=${1:-$OWNER_BALANCE_TARGET}
@@ -175,25 +246,49 @@ ensure_owner_balance() {
     while true; do
         local current_balance=$(get_address_balance "$owner_address")
         success "集群所有者当前余额: $current_balance SOL"
+        
+        # 如果已有余额，直接返回，不使用代理
         if (( $(echo "$current_balance > 0" | bc -l) )); then
             success "集群所有者已有余额，跳过领水"
+            # 确保代理已恢复（防止之前设置过代理）
+            restore_proxy
             return 0
         fi
 
         warning "集群所有者余额不足 ($current_balance SOL)，需要至少 $required_balance SOL，开始无限重试领水..."
+        
+        # 只在需要领取空投时设置代理
+        if [[ "$USE_PROXY_FOR_AIRDROP" == "true" ]] && [[ -n "$AIRDROP_PROXY" ]]; then
+            setup_proxy "$AIRDROP_PROXY"
+        fi
+        
         local attempt=0
+        
         while true; do
             attempt=$((attempt + 1))
-            log "尝试为集群所有者申请空投 (第 $attempt 次)..."
+            
+            # 每次重试都会使用代理，代理服务会自动切换IP
+            if [[ "$USE_PROXY_FOR_AIRDROP" == "true" ]] && [[ -n "$AIRDROP_PROXY" ]]; then
+                log "尝试为集群所有者申请空投 (第 $attempt 次，使用代理，代理将自动切换IP)..."
+            else
+                log "尝试为集群所有者申请空投 (第 $attempt 次，不使用代理)..."
+            fi
+            
             if solana airdrop 5 "$owner_address" -u devnet 2>/dev/null; then
                 success "空投请求已提交，等待到账..."
+                # 领取成功后立即恢复代理，后续操作不使用代理
+                restore_proxy
                 break
             else
-                warning "空投失败，10秒后重试..."
+                warning "空投失败，10秒后重试（代理将自动切换IP）..."
                 sleep 10
             fi
         done
+        
+        # 确保恢复原始代理设置（双重保险）
+        restore_proxy
 
+        # 等待余额到账（不使用代理）
         wait_for_balance "$owner_address" "$required_balance" "集群所有者" 24 || true
     done
 }
