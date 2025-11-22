@@ -1663,7 +1663,7 @@ show_node_info() {
     echo
     info "节点管理命令:"
     echo "  - 查看节点日志: docker compose logs -f"
-    echo "  - 查看文件日志: tail -f ./arx-node-logs/*.log"
+    echo "  - 查看文件日志: cd arcium-node-setup/ && tail -f ./arx-node-logs/*.log"
     echo "  - 停止节点: docker compose down"
     echo "  - 重启节点: docker compose restart"
     echo "  - 查看容器状态: docker ps"
