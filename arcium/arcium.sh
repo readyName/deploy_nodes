@@ -1522,20 +1522,38 @@ setup_arx_node() {
                 --rpc-url "$RPC_ENDPOINT" 2>&1)
             local invite_rc=$?
             
+            # 显示邀请命令的输出（用于调试）
+            if [[ -n "$invite_output" ]]; then
+                echo "$invite_output"
+            fi
+            
             if [ $invite_rc -eq 0 ]; then
                 success "✅ 集群所有者邀请节点成功"
+                # 邀请成功后，等待一段时间让邀请生效
+                log "等待邀请生效（10秒）..."
+                sleep 10
             else
                 # 检查错误类型
                 if echo "$invite_output" | grep -q "AccountNotInitialized\|0xbc4\|3012"; then
                     warning "⚠️ 集群账户可能尚未完全初始化，等待后重试..."
                     sleep 10
                     # 重试一次邀请
-                    if arcium propose-join-cluster \
+                    local retry_invite_output
+                    retry_invite_output=$(arcium propose-join-cluster \
                         --keypair-path "$CLUSTER_DIR/cluster-owner-keypair.json" \
                         --cluster-offset $cluster_offset \
                         --node-offset $node_offset \
-                        --rpc-url "$RPC_ENDPOINT" >/dev/null 2>&1; then
+                        --rpc-url "$RPC_ENDPOINT" 2>&1)
+                    local retry_invite_rc=$?
+                    
+                    if [[ -n "$retry_invite_output" ]]; then
+                        echo "$retry_invite_output"
+                    fi
+                    
+                    if [ $retry_invite_rc -eq 0 ]; then
                         success "✅ 集群所有者邀请节点成功（重试）"
+                        log "等待邀请生效（10秒）..."
+                        sleep 10
                     else
                         warning "⚠️ 自动邀请失败，可能原因："
                         warning "  - 集群账户尚未完全初始化（需要等待更长时间）"
@@ -1545,11 +1563,14 @@ setup_arx_node() {
                     fi
                 elif echo "$invite_output" | grep -q "already\|Already"; then
                     success "✅ 节点已被邀请或已在集群中"
+                    log "等待邀请生效（5秒）..."
+                    sleep 5
                 else
                     warning "⚠️ 自动邀请失败，可能原因："
                     warning "  - 集群所有者密钥不匹配"
                     warning "  - 节点已被邀请"
                     warning "  - 集群已满"
+                    warning "  - 邀请输出: $invite_output"
                     info "尝试继续执行加入流程..."
                 fi
             fi
@@ -1587,7 +1608,12 @@ setup_arx_node() {
                 --rpc-url "$RPC_ENDPOINT" 2>&1)
             local join_rc=$?
             
-            if [ $join_rc -eq 0 ] || echo "$join_output" | grep -q "success\|already\|Success"; then
+            # 显示加入集群命令的输出（用于调试）
+            if [[ -n "$join_output" ]]; then
+                echo "$join_output"
+            fi
+            
+            if [ $join_rc -eq 0 ] || echo "$join_output" | grep -qi "success\|already\|Success"; then
                 join_success=true
                 success "✅ 成功加入集群 $cluster_offset"
                 break
@@ -1600,18 +1626,29 @@ setup_arx_node() {
                     error "2. 集群已满员"
                     error "3. 网络连接问题"
                     error "4. 节点账户或集群账户尚未完全上链确认"
+                    error "5. 邀请尚未生效（需要等待更长时间）"
+                    if [[ -n "$join_output" ]]; then
+                        error "加入集群错误输出: $join_output"
+                    fi
                     info "请让集群管理者执行以下邀请命令："
                     info "arcium propose-join-cluster --keypair-path <集群管理者密钥> --cluster-offset $cluster_offset --node-offset $node_offset --rpc-url \"$RPC_ENDPOINT\""
                     info "或者等待更长时间后手动重试加入集群"
+                    info "手动加入命令: arcium join-cluster true --keypair-path node-keypair.json --node-offset $node_offset --cluster-offset $cluster_offset --rpc-url \"$RPC_ENDPOINT\""
                     return 1
                 else
                     warning "加入集群失败，第 $join_retry 次重试..."
+                    if [[ -n "$join_output" ]]; then
+                        warning "错误信息: $join_output"
+                    fi
                     # 如果节点账户查询失败，等待更长时间
                     if ! arcium arx-info $node_offset --rpc-url "$RPC_ENDPOINT" >/dev/null 2>&1; then
                         info "节点账户可能尚未完全上链，等待30秒..."
                         sleep 30
                     else
-                        sleep 15
+                        # 根据重试次数调整等待时间（越往后等待越久）
+                        local wait_time=$((15 + join_retry * 5))
+                        info "等待 ${wait_time} 秒后重试（邀请可能需要更多时间生效）..."
+                        sleep $wait_time
                     fi
                 fi
             fi
