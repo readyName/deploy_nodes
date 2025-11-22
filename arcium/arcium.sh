@@ -1472,20 +1472,86 @@ setup_arx_node() {
         local CLUSTER_DIR="$HOME/arcium-cluster-setup"
         
         if [[ -f "$CLUSTER_DIR/cluster-owner-keypair.json" ]]; then
+            # 先检查集群是否已初始化
+            log "检查集群 $cluster_offset 是否已完全初始化..."
+            local cluster_check_count=0
+            local cluster_ready=false
+            local max_cluster_checks=10
+            
+            while [ $cluster_check_count -lt $max_cluster_checks ]; do
+                if arcium fee-proposals $cluster_offset --rpc-url "$RPC_ENDPOINT" >/dev/null 2>&1; then
+                    cluster_ready=true
+                    success "集群已完全初始化"
+                    break
+                else
+                    cluster_check_count=$((cluster_check_count + 1))
+                    if [ $cluster_check_count -lt $max_cluster_checks ]; then
+                        info "等待集群初始化完成... ($cluster_check_count/$max_cluster_checks)"
+                        sleep 5
+                    fi
+                fi
+            done
+            
+            if [ "$cluster_ready" = false ]; then
+                warning "⚠️ 集群可能尚未完全初始化，但继续尝试邀请..."
+            fi
+            
+            # 等待节点账户完全上链（如果刚初始化）
+            log "等待节点账户完全上链（最多30秒）..."
+            local node_ready_count=0
+            while [ $node_ready_count -lt 6 ]; do
+                if arcium arx-info $node_offset --rpc-url "$RPC_ENDPOINT" >/dev/null 2>&1; then
+                    success "节点账户已可查询"
+                    break
+                else
+                    node_ready_count=$((node_ready_count + 1))
+                    if [ $node_ready_count -lt 6 ]; then
+                        info "等待节点账户上链... ($node_ready_count/6)"
+                        sleep 5
+                    fi
+                fi
+            done
+            
             log "使用集群所有者密钥邀请节点 $node_offset 加入集群 $cluster_offset..."
             
-            if arcium propose-join-cluster \
+            local invite_output
+            invite_output=$(arcium propose-join-cluster \
                 --keypair-path "$CLUSTER_DIR/cluster-owner-keypair.json" \
                 --cluster-offset $cluster_offset \
                 --node-offset $node_offset \
-                --rpc-url "$RPC_ENDPOINT" 2>&1; then
+                --rpc-url "$RPC_ENDPOINT" 2>&1)
+            local invite_rc=$?
+            
+            if [ $invite_rc -eq 0 ]; then
                 success "✅ 集群所有者邀请节点成功"
             else
-                warning "⚠️ 自动邀请失败，可能原因："
-                warning "  - 集群所有者密钥不匹配"
-                warning "  - 节点已被邀请"
-                warning "  - 集群已满"
-                info "尝试继续执行加入流程..."
+                # 检查错误类型
+                if echo "$invite_output" | grep -q "AccountNotInitialized\|0xbc4\|3012"; then
+                    warning "⚠️ 集群账户可能尚未完全初始化，等待后重试..."
+                    sleep 10
+                    # 重试一次邀请
+                    if arcium propose-join-cluster \
+                        --keypair-path "$CLUSTER_DIR/cluster-owner-keypair.json" \
+                        --cluster-offset $cluster_offset \
+                        --node-offset $node_offset \
+                        --rpc-url "$RPC_ENDPOINT" >/dev/null 2>&1; then
+                        success "✅ 集群所有者邀请节点成功（重试）"
+                    else
+                        warning "⚠️ 自动邀请失败，可能原因："
+                        warning "  - 集群账户尚未完全初始化（需要等待更长时间）"
+                        warning "  - 节点已被邀请"
+                        warning "  - 集群已满"
+                        info "尝试继续执行加入流程..."
+                    fi
+                elif echo "$invite_output" | grep -q "already\|Already"; then
+                    success "✅ 节点已被邀请或已在集群中"
+                else
+                    warning "⚠️ 自动邀请失败，可能原因："
+                    warning "  - 集群所有者密钥不匹配"
+                    warning "  - 节点已被邀请"
+                    warning "  - 集群已满"
+                    info "尝试继续执行加入流程..."
+                fi
             fi
         else
             warning "⚠️ 未找到集群所有者密钥，无法自动邀请"
@@ -1504,17 +1570,24 @@ setup_arx_node() {
 
         while [ $join_retry -lt $max_join_retries ]; do
             log "尝试加入集群 (尝试 $((join_retry+1))/$max_join_retries)..."
-                    # 每次重试前都检查一次状态
+            
+            # 每次重试前都检查一次状态
             if check_node_in_cluster "$node_offset" "$cluster_offset"; then
                 success "✅ 节点已在集群中，跳过本次加入尝试"
                 join_success=true
                 break
             fi
-            if arcium join-cluster true \
+            
+            # 尝试加入集群
+            local join_output
+            join_output=$(arcium join-cluster true \
                 --keypair-path node-keypair.json \
                 --node-offset $node_offset \
                 --cluster-offset $cluster_offset \
-                --rpc-url "$RPC_ENDPOINT" 2>&1 | grep -q "success\|already"; then
+                --rpc-url "$RPC_ENDPOINT" 2>&1)
+            local join_rc=$?
+            
+            if [ $join_rc -eq 0 ] || echo "$join_output" | grep -q "success\|already\|Success"; then
                 join_success=true
                 success "✅ 成功加入集群 $cluster_offset"
                 break
@@ -1526,12 +1599,20 @@ setup_arx_node() {
                     error "1. 集群管理者尚未邀请本节点"
                     error "2. 集群已满员"
                     error "3. 网络连接问题"
+                    error "4. 节点账户或集群账户尚未完全上链确认"
                     info "请让集群管理者执行以下邀请命令："
                     info "arcium propose-join-cluster --keypair-path <集群管理者密钥> --cluster-offset $cluster_offset --node-offset $node_offset --rpc-url \"$RPC_ENDPOINT\""
+                    info "或者等待更长时间后手动重试加入集群"
                     return 1
                 else
                     warning "加入集群失败，第 $join_retry 次重试..."
-                    sleep 15
+                    # 如果节点账户查询失败，等待更长时间
+                    if ! arcium arx-info $node_offset --rpc-url "$RPC_ENDPOINT" >/dev/null 2>&1; then
+                        info "节点账户可能尚未完全上链，等待30秒..."
+                        sleep 30
+                    else
+                        sleep 15
+                    fi
                 fi
             fi
         done
