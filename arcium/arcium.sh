@@ -1540,8 +1540,27 @@ EOF
     local container_running=false
     
     while [ $check_count -lt $max_checks ]; do
-        # 检查容器是否存在且运行中
-        if docker ps --format "{{.Names}}" | grep -q "^arx-node$"; then
+        # 使用多种方法检查容器是否运行
+        local check_result1=false
+        local check_result2=false
+        
+        # 方法1: 使用 docker ps --format
+        if docker ps --format "{{.Names}}" 2>/dev/null | grep -q "^arx-node$"; then
+            check_result1=true
+        fi
+        
+        # 方法2: 使用 docker ps --filter
+        if docker ps --filter "name=arx-node" --format "{{.Names}}" 2>/dev/null | grep -q "^arx-node$"; then
+            check_result2=true
+        fi
+        
+        # 方法3: 使用 docker ps 然后 grep
+        if docker ps 2>/dev/null | grep -q "arx-node"; then
+            check_result1=true
+            check_result2=true
+        fi
+        
+        if [ "$check_result1" = true ] || [ "$check_result2" = true ]; then
             container_running=true
             success "Arx 节点容器已启动"
             break
