@@ -1532,16 +1532,42 @@ EOF
     # 检查节点状态
     log "等待节点启动..."
     sleep 5
+    
+    # 使用重试机制检查容器状态
     log "检查容器是否运行..."
-    if docker ps | grep -q arx-node; then
-        success "Arx 节点容器已启动"
+    local max_checks=6
+    local check_count=0
+    local container_running=false
+    
+    while [ $check_count -lt $max_checks ]; do
+        # 检查容器是否存在且运行中
+        if docker ps --format "{{.Names}}" | grep -q "^arx-node$"; then
+            container_running=true
+            success "Arx 节点容器已启动"
+            break
+        fi
+        
+        check_count=$((check_count + 1))
+        if [ $check_count -lt $max_checks ]; then
+            info "等待容器启动... ($check_count/$max_checks)"
+            sleep 3
+        fi
+    done
+    
+    if [ "$container_running" = true ]; then
         # 添加容器健康状态检查
         log "检查容器详细状态..."
-        if docker compose ps | grep -q "Up"; then
-            success "节点容器运行正常"
+        local container_status=$(docker ps --filter "name=arx-node" --format "{{.Status}}" 2>/dev/null || echo "")
+        if [[ -n "$container_status" ]]; then
+            success "节点容器运行正常: $container_status"
         else
-            warning "节点容器已启动但可能有问题，请检查日志"
+            warning "节点容器已启动但状态信息获取失败，请检查日志"
         fi
+        
+        # 显示容器信息
+        log "容器详细信息:"
+        docker ps --filter "name=arx-node" --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}" 2>/dev/null || true
+        
         success "Arx 节点启动成功！"
         success "节点 Offset: $node_offset"
         success "节点地址: $node_pubkey"
@@ -1553,9 +1579,12 @@ EOF
         echo "$node_offset:$actual_port_used" >&1
         return 0
     else
-        error "节点启动失败，请检查日志"
-        log "检查容器状态: docker ps -a"
-        log "查看容器日志: docker compose logs"
+        error "节点启动失败，容器未运行"
+        log "检查所有容器状态:"
+        docker ps -a --filter "name=arx-node" || true
+        log "查看容器日志（最后50行）:"
+        docker compose logs --tail=50 || docker logs arx-node --tail=50 2>/dev/null || true
+        error "请检查上述错误信息并手动排查问题"
         return 1
     fi
 }
