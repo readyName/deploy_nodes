@@ -1966,7 +1966,7 @@ create_desktop_launcher() {
     # 创建 .command 文件
     local launcher_file="$desktop_dir/启动Arcium节点.command"
     
-    cat > "$launcher_file" << 'EOF'
+cat > "$launcher_file" << 'EOF'
 #!/bin/bash
 
 # 设置错误处理
@@ -2015,12 +2015,21 @@ echo -e "${GREEN}✓${NC} 检查 Docker 状态..."
 echo -e "${GREEN}✓${NC} 进入节点目录: $NODE_DIR"
 echo
 
-# 检查容器是否已在运行
-if docker ps | grep -q arx-node; then
-    echo -e "${GREEN}✓${NC} 节点容器已在运行"
+echo -e "${BLUE}正在重启节点...${NC}"
+
+# 无论是否运行，先尝试停止旧容器
+docker compose down >/dev/null 2>&1 || true
+sleep 2
+
+# 启动节点
+if docker compose up -d; then
+    echo -e "${GREEN}✓${NC} 节点启动成功！"
     echo
     echo -e "${BLUE}节点信息:${NC}"
     docker compose ps
+    echo
+    sleep 2
+    echo -e "${GREEN}✓${NC} 节点正在运行中..."
     echo
     echo -e "${BLUE}正在打开文件日志查看...${NC}"
     echo -e "${YELLOW}提示: 按 Ctrl+C 退出日志查看${NC}"
@@ -2030,31 +2039,10 @@ if docker ps | grep -q arx-node; then
     # 直接打开文件日志查看
     tail -f ./arx-node-logs/*.log
 else
-    echo -e "${BLUE}正在启动节点...${NC}"
-    
-    # 启动节点
-    if docker compose up -d; then
-        echo -e "${GREEN}✓${NC} 节点启动成功！"
-        echo
-        echo -e "${BLUE}节点信息:${NC}"
-        docker compose ps
-        echo
-        sleep 2
-        echo -e "${GREEN}✓${NC} 节点正在运行中..."
-        echo
-        echo -e "${BLUE}正在打开文件日志查看...${NC}"
-        echo -e "${YELLOW}提示: 按 Ctrl+C 退出日志查看${NC}"
-        echo
-        sleep 1
-        
-        # 直接打开文件日志查看
-        tail -f ./arx-node-logs/*.log
-    else
-        echo -e "${YELLOW}⚠️  节点启动失败，请检查错误信息${NC}"
-        docker compose logs --tail=20
-        echo
-        read -n 1 -s -p "按任意键关闭窗口..."
-    fi
+    echo -e "${YELLOW}⚠️  节点启动失败，请检查错误信息${NC}"
+    docker compose logs --tail=20
+    echo
+    read -n 1 -s -p "按任意键关闭窗口..."
 fi
 EOF
     
