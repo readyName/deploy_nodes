@@ -375,6 +375,11 @@ install_dependencies() {
 
 # 安装 Rust
 install_rust() {
+    # 配置 git 协议，将 git:// 替换为 https://
+    log "配置 git 协议..."
+    git config --global url."https://".insteadOf "git://"
+    success "git 协议配置完成"
+    
     if ! check_cmd "cargo"; then
         log "安装 Rust..."
         # 使用 README 中的安装命令
