@@ -680,6 +680,7 @@ resume_from_progress() {
             deploy_node
             verify_node
             clear_progress
+            print_summary
             ;;
         "init_failed")
             print_info "Resuming from initialization step..."
@@ -692,6 +693,7 @@ resume_from_progress() {
             deploy_node
             verify_node
             clear_progress
+            print_summary
             ;;
         "cluster_init_failed")
             print_info "Resuming from cluster initialization step..."
@@ -703,6 +705,7 @@ resume_from_progress() {
             deploy_node
             verify_node
             clear_progress
+            print_summary
             ;;
         "propose_failed")
             print_info "Resuming from proposal step..."
@@ -713,6 +716,7 @@ resume_from_progress() {
             deploy_node
             verify_node
             clear_progress
+            print_summary
             ;;
         "join_failed")
             print_info "Resuming from join step..."
@@ -722,12 +726,14 @@ resume_from_progress() {
             deploy_node
             verify_node
             clear_progress
+            print_summary
             ;;
         "deploy_failed")
             print_info "Resuming from deployment step..."
             deploy_node
             verify_node
             clear_progress
+            print_summary
             ;;
         *)
             print_warning "Unknown progress state: $last_step"
@@ -1715,7 +1721,13 @@ print_summary() {
 
 # Handle command line arguments
 handle_arguments() {
-    case "${1:-help}" in
+    # 如果没有提供参数，默认进入安装流程
+    if [ $# -eq 0 ]; then
+        main_install
+        return 0
+    fi
+    
+    case "$1" in
         "install")
             main_install
             ;;
