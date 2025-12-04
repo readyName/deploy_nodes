@@ -1722,7 +1722,7 @@ print_summary() {
 # Handle command line arguments
 handle_arguments() {
     # 如果没有提供参数，默认进入安装流程
-    if [ $# -eq 0 ]; then
+    if [ $# -eq 0 ] || [ -z "$1" ]; then
         main_install
         return 0
     fi
@@ -1898,9 +1898,15 @@ main_install() {
 
 # Main function
 main() {
+    # 确保参数正确传递
     handle_arguments "$@"
 }
 
 # Run main function
-main "$@"
+# 如果没有参数，直接调用 main_install
+if [ $# -eq 0 ]; then
+    main_install
+else
+    main "$@"
+fi
 
