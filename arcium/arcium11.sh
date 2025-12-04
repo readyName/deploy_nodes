@@ -13,7 +13,7 @@
 # - Deploys and starts the node
 # - Verifies node operation
 #
-# Usage: bash <(curl -fsSL https://raw.githubusercontent.com/readyName/deploy_nodes/refs/heads/main/arcium/arcium11.sh) [COMMAND]
+# Usage: curl -sSL https://raw.githubusercontent.com/sicmundu/arcium-hello-world/refs/heads/main/arcium-node-autoinstall.sh | bash
 ################################################################################
 
 set -e  # Exit on any error
@@ -414,7 +414,7 @@ clear_cluster_offset() {
 # Show help
 show_help() {
     echo -e "${CYAN}Arcium Node Management Script v2.0.0${NC}\n"
-    echo -e "${YELLOW}Usage:${NC} bash <(curl -fsSL https://raw.githubusercontent.com/readyName/deploy_nodes/refs/heads/main/arcium/arcium11.sh) [COMMAND]\n"
+    echo -e "${YELLOW}Usage:${NC} bash <(curl -s https://raw.githubusercontent.com/sicmundu/arcium-hello-world/refs/heads/main/arcium-node-autoinstall.sh) [COMMAND]\n"
     echo -e "${YELLOW}Commands:${NC}"
     echo -e "  ${GREEN}install${NC}     Install and setup a new Arcium node"
     echo -e "  ${GREEN}start${NC}       Start an existing node"
@@ -426,12 +426,12 @@ show_help() {
     echo -e "  ${GREEN}logs${NC}        Show node logs"
     echo -e "  ${GREEN}help${NC}        Show this help message\n"
     echo -e "${YELLOW}Examples:${NC}"
-    echo -e "  bash <(curl -fsSL https://raw.githubusercontent.com/readyName/deploy_nodes/refs/heads/main/arcium/arcium11.sh) install"
-    echo -e "  bash <(curl -fsSL https://raw.githubusercontent.com/readyName/deploy_nodes/refs/heads/main/arcium/arcium11.sh) start"
-    echo -e "  bash <(curl -fsSL https://raw.githubusercontent.com/readyName/deploy_nodes/refs/heads/main/arcium/arcium11.sh) status"
-    echo -e "  bash <(curl -fsSL https://raw.githubusercontent.com/readyName/deploy_nodes/refs/heads/main/arcium/arcium11.sh) logs"
-    echo -e "  bash <(curl -fsSL https://raw.githubusercontent.com/readyName/deploy_nodes/refs/heads/main/arcium/arcium11.sh) info"
-    echo -e "  bash <(curl -fsSL https://raw.githubusercontent.com/readyName/deploy_nodes/refs/heads/main/arcium/arcium11.sh) active"
+    echo -e "  bash <(curl -s https://raw.githubusercontent.com/sicmundu/arcium-hello-world/refs/heads/main/arcium-node-autoinstall.sh) install"
+    echo -e "  bash <(curl -s https://raw.githubusercontent.com/sicmundu/arcium-hello-world/refs/heads/main/arcium-node-autoinstall.sh) start"
+    echo -e "  bash <(curl -s https://raw.githubusercontent.com/sicmundu/arcium-hello-world/refs/heads/main/arcium-node-autoinstall.sh) status"
+    echo -e "  bash <(curl -s https://raw.githubusercontent.com/sicmundu/arcium-hello-world/refs/heads/main/arcium-node-autoinstall.sh) logs"
+    echo -e "  bash <(curl -s https://raw.githubusercontent.com/sicmundu/arcium-hello-world/refs/heads/main/arcium-node-autoinstall.sh) info"
+    echo -e "  bash <(curl -s https://raw.githubusercontent.com/sicmundu/arcium-hello-world/refs/heads/main/arcium-node-autoinstall.sh) active"
 }
 
 # Check if node is installed
