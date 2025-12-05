@@ -1127,12 +1127,48 @@ setup_workspace() {
 get_public_ip() {
     print_section "Detecting Public IP Address"
     
-    PUBLIC_IP=$(curl -s https://ipecho.net/plain || curl -s https://api.ipify.org || curl -s https://ifconfig.me)
+    # 临时禁用错误退出，以便尝试多个 IP 检测服务
+    set +e
+    PUBLIC_IP=$(curl -s --max-time 5 https://ipecho.net/plain 2>/dev/null || \
+                curl -s --max-time 5 https://api.ipify.org 2>/dev/null || \
+                curl -s --max-time 5 https://ifconfig.me 2>/dev/null || \
+                curl -s --max-time 5 https://icanhazip.com 2>/dev/null || \
+                curl -s --max-time 5 ipv4.icanhazip.com 2>/dev/null)
+    set -e  # 恢复错误退出
     
     if [ -z "$PUBLIC_IP" ]; then
-        print_error "Could not detect public IP address"
-        print_info "Please enter your public IP manually:"
+        print_error "Could not detect public IP address automatically"
+        print_info "Please enter your public IP address manually:"
+        print_warning "⚠️  如果您的服务器使用 IPv6，请输入 IPv4 地址（Arcium 节点需要 IPv4）"
+        echo -n -e "${CYAN}Public IP: ${NC}"
         read -r PUBLIC_IP
+        
+        if [ -z "$PUBLIC_IP" ]; then
+            print_error "Public IP address is required"
+            exit 1
+        fi
+    fi
+    
+    # 检查是否是 IPv6 地址
+    if echo "$PUBLIC_IP" | grep -qE '^([0-9a-fA-F]{0,4}:){1,7}[0-9a-fA-F]{0,4}$'; then
+        print_warning "⚠️  检测到 IPv6 地址: $PUBLIC_IP"
+        print_warning "⚠️  Arcium 节点可能需要 IPv4 地址"
+        print_info "💡 建议："
+        print_info "   1. 如果您的服务器有 IPv4 地址，请手动输入 IPv4 地址"
+        print_info "   2. 或者尝试使用 IPv4 检测服务"
+        print_info "   3. 如果只有 IPv6，可能需要配置 IPv4 映射或使用代理"
+        echo
+        print_info "是否继续使用 IPv6 地址？(y/N)"
+        read -r response
+        if [[ ! "$response" =~ ^[Yy]$ ]]; then
+            print_info "请手动输入 IPv4 地址:"
+            echo -n -e "${CYAN}IPv4 Address: ${NC}"
+            read -r PUBLIC_IP
+            if [ -z "$PUBLIC_IP" ]; then
+                print_error "IPv4 address is required"
+                exit 1
+            fi
+        fi
     fi
     
     print_success "Public IP: $PUBLIC_IP"
@@ -1403,6 +1439,8 @@ initialize_node_accounts() {
         fi
         
         # 执行初始化命令并捕获输出
+        # 使用 set +e 临时禁用错误退出，以便捕获错误信息
+        set +e
         local init_output
         init_output=$(arcium init-arx-accs \
             --keypair-path "$NODE_KEYPAIR" \
@@ -1412,6 +1450,7 @@ initialize_node_accounts() {
             --ip-address "$PUBLIC_IP" \
             --rpc-url "$RPC_URL" 2>&1)
         local init_rc=$?
+        set -e  # 恢复错误退出
         
         # 显示输出
         echo "$init_output"
@@ -1464,8 +1503,10 @@ initialize_node_accounts() {
         echo
         print_warning "Saving progress for manual continuation..."
         save_progress "init_failed"
-        exit 1
+        return 1  # 返回错误码而不是 exit，让调用者处理
     fi
+    
+    return 0  # 成功返回
 }
 
 # Generate cluster offset
@@ -1932,7 +1973,19 @@ main_install() {
     save_progress "funding_completed"
     
     show_progress 5 9 "Initializing node accounts"
+    # 使用 set +e 临时禁用错误退出，以便保存进度
+    set +e
     initialize_node_accounts
+    local init_result=$?
+    set -e
+    
+    if [ $init_result -ne 0 ]; then
+        print_error "节点账户初始化失败，已保存进度"
+        print_info "您可以稍后重新运行脚本继续安装，或手动执行恢复命令"
+        print_info "重新运行脚本时会提示是否从断点继续"
+        exit 1
+    fi
+    
     save_progress "init_completed"
     
     show_progress 6 9 "Initializing cluster"
