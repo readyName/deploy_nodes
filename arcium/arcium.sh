@@ -1409,23 +1409,6 @@ setup_arx_node() {
         fi
         echo "DEBUG: identity.pem 生成完成" >&2
         
-        # 生成 BLS 密钥对（如果需要，使用 identity.pem 作为替代）
-        if [[ ! -f "bls-keypair.json" ]]; then
-            log "生成 BLS 密钥对..."
-            echo "DEBUG: 开始生成 BLS 密钥对" >&2
-            # 尝试使用 solana-keygen 生成 BLS 密钥对
-            # 如果失败，使用 identity.pem 作为替代
-            if solana-keygen new --outfile bls-keypair.json --no-bip39-passphrase --silent --force 2>/dev/null; then
-                echo "DEBUG: BLS 密钥对生成完成" >&2
-                success "BLS 密钥对生成完成"
-            else
-                warning "无法生成独立的 BLS 密钥对，使用 identity.pem 作为替代"
-                cp identity.pem bls-keypair.json
-            fi
-        else
-            echo "DEBUG: BLS 密钥对已存在" >&2
-        fi
-        
         echo "密钥对生成完成" >&2
         
         # 获取公钥
@@ -1639,17 +1622,10 @@ setup_arx_node() {
             info "📝 正在将节点账户信息上链，请稍候..."
 
             # 使用新版本必需的参数
-            # 如果 BLS 密钥对不存在，使用 identity.pem 作为替代
-            local bls_keypair_path="identity.pem"
-            if [[ -f "bls-keypair.json" ]]; then
-                bls_keypair_path="bls-keypair.json"
-            fi
-            
             init_output=$(arcium init-arx-accs \
                 --keypair-path node-keypair.json \
                 --callback-keypair-path callback-kp.json \
                 --peer-keypair-path identity.pem \
-                --bls-keypair-path "$bls_keypair_path" \
                 --node-offset $node_offset \
                 --ip-address $public_ip \
                 --operator-location "0" \
