@@ -300,14 +300,14 @@ if [[ -d "rl-swarm" ]]; then
   if [[ "$confirm" =~ ^[Yy]$ ]]; then
     echo "🗑️ 正在删除旧目录..."
     rm -rf rl-swarm
-    echo "📥 正在克隆 rl-swarm 仓库 (v0.5.8.1 分支)..."
-    git clone -b v0.5.8.1 https://github.com/readyName/rl-swarm.git
+    echo "📥 正在克隆 rl-swarm 仓库 (v0.7.0 分支)..."
+    git clone -b 0.7.0 https://github.com/readyName/rl-swarm.git
   else
     echo "❌ 跳过克隆，继续后续流程。"
   fi
 else
-  echo "📥 正在克隆 rl-swarm 仓库 (v0.5.8.1 分支)..."
-  git clone -b v0.5.8.1 https://github.com/readyName/rl-swarm.git
+  echo "📥 正在克隆 rl-swarm 仓库 (0.7.0 分支)..."
+  git clone -b 0.7.0 https://github.com/readyName/rl-swarm.git
 fi
 
 # ----------- 复制临时目录中的 user 关键文件 -----------
