@@ -1425,6 +1425,26 @@ initialize_node_accounts() {
     print_info "RPC endpoint: $RPC_URL"
     print_info "Initializing accounts (this may take a moment)..."
     
+    # 检查 arcium 命令是否存在
+    if ! command_exists arcium; then
+        print_error "arcium 命令未找到，请先安装 Arcium CLI"
+        return 1
+    fi
+    
+    # 检查密钥文件是否存在
+    if [ ! -f "$NODE_KEYPAIR" ]; then
+        print_error "节点密钥文件不存在: $NODE_KEYPAIR"
+        return 1
+    fi
+    if [ ! -f "$CALLBACK_KEYPAIR" ]; then
+        print_error "回调密钥文件不存在: $CALLBACK_KEYPAIR"
+        return 1
+    fi
+    if [ ! -f "$IDENTITY_KEYPAIR" ]; then
+        print_error "身份密钥文件不存在: $IDENTITY_KEYPAIR"
+        return 1
+    fi
+    
     # 改进的错误处理和重试逻辑
     local max_retries=3
     local retry_count=0
@@ -1441,19 +1461,53 @@ initialize_node_accounts() {
         # 执行初始化命令并捕获输出
         # 使用 set +e 临时禁用错误退出，以便捕获错误信息
         set +e
+        print_info "正在执行初始化命令..."
+        print_info "命令: arcium init-arx-accs --keypair-path $NODE_KEYPAIR --callback-keypair-path $CALLBACK_KEYPAIR --peer-keypair-path $IDENTITY_KEYPAIR --node-offset $NODE_OFFSET --ip-address $PUBLIC_IP --rpc-url $RPC_URL"
+        
         local init_output
-        init_output=$(arcium init-arx-accs \
-            --keypair-path "$NODE_KEYPAIR" \
-            --callback-keypair-path "$CALLBACK_KEYPAIR" \
-            --peer-keypair-path "$IDENTITY_KEYPAIR" \
-            --node-offset "$NODE_OFFSET" \
-            --ip-address "$PUBLIC_IP" \
-            --rpc-url "$RPC_URL" 2>&1)
-        local init_rc=$?
+        local init_rc=1
+        
+        # 使用 timeout 防止命令无限挂起（最多等待 120 秒）
+        if command -v timeout >/dev/null 2>&1; then
+            print_info "使用 timeout 命令执行（最多等待 120 秒）..."
+            init_output=$(timeout 120 arcium init-arx-accs \
+                --keypair-path "$NODE_KEYPAIR" \
+                --callback-keypair-path "$CALLBACK_KEYPAIR" \
+                --peer-keypair-path "$IDENTITY_KEYPAIR" \
+                --node-offset "$NODE_OFFSET" \
+                --ip-address "$PUBLIC_IP" \
+                --rpc-url "$RPC_URL" 2>&1)
+            init_rc=$?
+            
+            # 检查是否是超时
+            if [ $init_rc -eq 124 ]; then
+                print_error "❌ 命令执行超时（超过 120 秒）"
+                init_output="Command timed out after 120 seconds"
+            fi
+        else
+            # 如果没有 timeout 命令，直接执行
+            print_info "直接执行命令（无超时限制）..."
+            init_output=$(arcium init-arx-accs \
+                --keypair-path "$NODE_KEYPAIR" \
+                --callback-keypair-path "$CALLBACK_KEYPAIR" \
+                --peer-keypair-path "$IDENTITY_KEYPAIR" \
+                --node-offset "$NODE_OFFSET" \
+                --ip-address "$PUBLIC_IP" \
+                --rpc-url "$RPC_URL" 2>&1)
+            init_rc=$?
+        fi
+        
         set -e  # 恢复错误退出
         
         # 显示输出
-        echo "$init_output"
+        print_info "=== 命令输出开始 ==="
+        if [ -n "$init_output" ]; then
+            echo "$init_output"
+        else
+            print_warning "命令没有输出"
+        fi
+        print_info "=== 命令输出结束 ==="
+        print_info "命令退出码: $init_rc"
         
         if [ $init_rc -eq 0 ]; then
             init_success=true
