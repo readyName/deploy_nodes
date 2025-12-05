@@ -560,6 +560,139 @@ install_arcium() {
 
 # ========== 新的集群管理函数 ==========
 
+# 备份、删除、重建目录并恢复密钥文件
+backup_and_rebuild_directories() {
+    log "备份、删除、重建目录并恢复密钥文件..."
+    
+    local NODE_DIR="$HOME/arcium-node-setup"
+    local CLUSTER_DIR="$HOME/arcium-cluster-setup"
+    local BACKUP_DIR="$HOME/.arcium-backup-$(date +%s)"
+    local keys_found=false
+    
+    # 创建备份目录
+    mkdir -p "$BACKUP_DIR"
+    log "备份目录: $BACKUP_DIR"
+    
+    # 检测并备份节点密钥文件
+    if [ -f "$NODE_DIR/node-keypair.json" ]; then
+        log "检测到节点密钥文件，正在备份..."
+        cp "$NODE_DIR/node-keypair.json" "$BACKUP_DIR/node-keypair.json" 2>/dev/null && {
+            success "✓ 已备份 node-keypair.json"
+            keys_found=true
+        } || warning "⚠️  备份 node-keypair.json 失败"
+    fi
+    
+    if [ -f "$NODE_DIR/callback-kp.json" ]; then
+        log "检测到回调密钥文件，正在备份..."
+        cp "$NODE_DIR/callback-kp.json" "$BACKUP_DIR/callback-kp.json" 2>/dev/null && {
+            success "✓ 已备份 callback-kp.json"
+            keys_found=true
+        } || warning "⚠️  备份 callback-kp.json 失败"
+    fi
+    
+    if [ -f "$NODE_DIR/identity.pem" ]; then
+        log "检测到身份密钥文件，正在备份..."
+        cp "$NODE_DIR/identity.pem" "$BACKUP_DIR/identity.pem" 2>/dev/null && {
+            success "✓ 已备份 identity.pem"
+            keys_found=true
+        } || warning "⚠️  备份 identity.pem 失败"
+    fi
+    
+    # 备份集群目录中的密钥（如果存在）
+    if [ -f "$CLUSTER_DIR/cluster-owner-keypair.json" ]; then
+        log "检测到集群所有者密钥文件，正在备份..."
+        mkdir -p "$BACKUP_DIR/cluster"
+        cp "$CLUSTER_DIR/cluster-owner-keypair.json" "$BACKUP_DIR/cluster/cluster-owner-keypair.json" 2>/dev/null && {
+            success "✓ 已备份 cluster-owner-keypair.json"
+            keys_found=true
+        } || warning "⚠️  备份 cluster-owner-keypair.json 失败"
+        
+        # 备份集群信息文件（如果存在）
+        if [ -f "$CLUSTER_DIR/cluster-info.txt" ]; then
+            cp "$CLUSTER_DIR/cluster-info.txt" "$BACKUP_DIR/cluster/cluster-info.txt" 2>/dev/null && {
+                success "✓ 已备份 cluster-info.txt"
+            } || warning "⚠️  备份 cluster-info.txt 失败"
+        fi
+    fi
+    
+    if [ "$keys_found" = true ]; then
+        success "✅ 密钥文件备份完成"
+    else
+        info "未检测到密钥文件，跳过备份"
+    fi
+    
+    # 删除现有目录
+    log "删除现有目录..."
+    if [ -d "$NODE_DIR" ]; then
+        log "删除节点目录: $NODE_DIR"
+        rm -rf "$NODE_DIR" && success "✓ 节点目录已删除" || warning "⚠️  删除节点目录失败"
+    else
+        info "节点目录不存在，跳过删除"
+    fi
+    
+    if [ -d "$CLUSTER_DIR" ]; then
+        log "删除集群目录: $CLUSTER_DIR"
+        rm -rf "$CLUSTER_DIR" && success "✓ 集群目录已删除" || warning "⚠️  删除集群目录失败"
+    else
+        info "集群目录不存在，跳过删除"
+    fi
+    
+    # 重新创建目录
+    log "重新创建目录..."
+    mkdir -p "$NODE_DIR" && success "✓ 节点目录已创建: $NODE_DIR" || {
+        error "创建节点目录失败"
+        return 1
+    }
+    
+    mkdir -p "$CLUSTER_DIR" && success "✓ 集群目录已创建: $CLUSTER_DIR" || {
+        error "创建集群目录失败"
+        return 1
+    }
+    
+    # 恢复备份的密钥文件
+    if [ "$keys_found" = true ]; then
+        log "恢复备份的密钥文件..."
+        
+        if [ -f "$BACKUP_DIR/node-keypair.json" ]; then
+            cp "$BACKUP_DIR/node-keypair.json" "$NODE_DIR/node-keypair.json" 2>/dev/null && {
+                success "✓ 已恢复 node-keypair.json"
+            } || warning "⚠️  恢复 node-keypair.json 失败"
+        fi
+        
+        if [ -f "$BACKUP_DIR/callback-kp.json" ]; then
+            cp "$BACKUP_DIR/callback-kp.json" "$NODE_DIR/callback-kp.json" 2>/dev/null && {
+                success "✓ 已恢复 callback-kp.json"
+            } || warning "⚠️  恢复 callback-kp.json 失败"
+        fi
+        
+        if [ -f "$BACKUP_DIR/identity.pem" ]; then
+            cp "$BACKUP_DIR/identity.pem" "$NODE_DIR/identity.pem" 2>/dev/null && {
+                success "✓ 已恢复 identity.pem"
+            } || warning "⚠️  恢复 identity.pem 失败"
+        fi
+        
+        # 恢复集群密钥文件
+        if [ -f "$BACKUP_DIR/cluster/cluster-owner-keypair.json" ]; then
+            cp "$BACKUP_DIR/cluster/cluster-owner-keypair.json" "$CLUSTER_DIR/cluster-owner-keypair.json" 2>/dev/null && {
+                success "✓ 已恢复 cluster-owner-keypair.json"
+            } || warning "⚠️  恢复 cluster-owner-keypair.json 失败"
+        fi
+        
+        if [ -f "$BACKUP_DIR/cluster/cluster-info.txt" ]; then
+            cp "$BACKUP_DIR/cluster/cluster-info.txt" "$CLUSTER_DIR/cluster-info.txt" 2>/dev/null && {
+                success "✓ 已恢复 cluster-info.txt"
+            } || warning "⚠️  恢复 cluster-info.txt 失败"
+        fi
+        
+        success "✅ 密钥文件恢复完成"
+        info "备份文件保存在: $BACKUP_DIR"
+    else
+        info "没有备份文件需要恢复"
+    fi
+    
+    success "✅ 目录重建和密钥恢复完成"
+}
+
 # 修复的集群存在检查函数
 check_cluster_exists() {
     local cluster_offset=$1
@@ -2221,6 +2354,9 @@ main() {
     echo "  - WSS 端点: $WSS_ENDPOINT"
     echo "  - 集群目录: $CLUSTER_DIR"
     echo
+    
+    # 备份、删除、重建目录并恢复密钥文件
+    backup_and_rebuild_directories
     
     # 先检查和安装组件
     info "检查节点运行所需组件..."

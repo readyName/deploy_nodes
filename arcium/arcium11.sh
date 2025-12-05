@@ -634,8 +634,30 @@ select_rpc() {
         
         # 基本验证
         if [[ "$custom_rpc" =~ ^https?:// ]]; then
-            RPC_URL="$custom_rpc"
-            print_success "✅ Custom RPC endpoint set: $RPC_URL"
+            # 检查并修复常见的错误 RPC URL 格式
+            # Helius RPC URL 常见错误：包含 /v0/transactions/ 路径
+            if [[ "$custom_rpc" =~ helius.*/v0/transactions ]]; then
+                print_warning "⚠️  检测到错误的 Helius RPC URL 格式，正在修复..."
+                # 提取域名和 API key
+                if [[ "$custom_rpc" =~ (https?://[^/]+).*api-key=([^&]+) ]]; then
+                    fixed_rpc="${BASH_REMATCH[1]}/?api-key=${BASH_REMATCH[2]}"
+                    custom_rpc="$fixed_rpc"
+                    print_info "修复后的 RPC URL: $custom_rpc"
+                fi
+            fi
+            
+            # 验证 RPC 端点是否可访问
+            print_info "验证 RPC 端点..."
+            if curl -s --max-time 5 -X POST "$custom_rpc" \
+                -H "Content-Type: application/json" \
+                -d '{"jsonrpc":"2.0","id":1,"method":"getHealth"}' >/dev/null 2>&1; then
+                RPC_URL="$custom_rpc"
+                print_success "✅ Custom RPC endpoint set and verified: $RPC_URL"
+            else
+                print_warning "⚠️  RPC 端点验证失败，但将继续使用"
+                print_warning "⚠️  如果后续出现问题，请检查 RPC URL 是否正确"
+                RPC_URL="$custom_rpc"
+            fi
         else
             print_error "❌ Invalid RPC URL format. Must start with http:// or https://"
             print_info "🔄 Using default RPC endpoint instead"
@@ -1364,32 +1386,86 @@ initialize_node_accounts() {
     
     print_info "Node offset: $NODE_OFFSET"
     print_info "IP address: $PUBLIC_IP"
+    print_info "RPC endpoint: $RPC_URL"
     print_info "Initializing accounts (this may take a moment)..."
     
-    if ! arcium init-arx-accs \
-        --keypair-path "$NODE_KEYPAIR" \
-        --callback-keypair-path "$CALLBACK_KEYPAIR" \
-        --peer-keypair-path "$IDENTITY_KEYPAIR" \
-        --node-offset "$NODE_OFFSET" \
-        --ip-address "$PUBLIC_IP" \
-        --rpc-url "$RPC_URL"; then
-        print_error "Node initialization failed"
+    # 改进的错误处理和重试逻辑
+    local max_retries=3
+    local retry_count=0
+    local init_success=false
+    
+    while [ $retry_count -lt $max_retries ]; do
+        retry_count=$((retry_count + 1))
+        
+        if [ $retry_count -gt 1 ]; then
+            print_info "重试初始化节点账户 (尝试 $retry_count/$max_retries)..."
+            sleep 5
+        fi
+        
+        # 执行初始化命令并捕获输出
+        local init_output
+        init_output=$(arcium init-arx-accs \
+            --keypair-path "$NODE_KEYPAIR" \
+            --callback-keypair-path "$CALLBACK_KEYPAIR" \
+            --peer-keypair-path "$IDENTITY_KEYPAIR" \
+            --node-offset "$NODE_OFFSET" \
+            --ip-address "$PUBLIC_IP" \
+            --rpc-url "$RPC_URL" 2>&1)
+        local init_rc=$?
+        
+        # 显示输出
+        echo "$init_output"
+        
+        if [ $init_rc -eq 0 ]; then
+            init_success=true
+            print_success "Node accounts initialized on-chain"
+            break
+        else
+            # 检查是否是 JSON 解析错误（RPC 端点问题）
+            if echo "$init_output" | grep -q "cannot access key.*in JSON\|JSON array\|serde_json"; then
+                print_error "❌ RPC 端点返回了无效的 JSON 响应"
+                print_warning "⚠️  这通常意味着 RPC URL 格式不正确或端点不可用"
+                print_info "💡 建议："
+                print_info "   1. 检查 RPC URL 是否正确（Helius RPC 应该是: https://api-devnet.helius-rpc.com/?api-key=xxx)"
+                print_info "   2. 尝试使用默认 RPC: $DEFAULT_RPC_URL"
+                print_info "   3. 确认 RPC 端点支持 Solana devnet"
+                
+                if [ $retry_count -lt $max_retries ]; then
+                    print_info "🔄 将在 10 秒后重试..."
+                    sleep 10
+                fi
+            elif echo "$init_output" | grep -qi "already in use\|already exists"; then
+                print_warning "⚠️  节点账户可能已存在，跳过初始化"
+                init_success=true
+                break
+            else
+                if [ $retry_count -lt $max_retries ]; then
+                    print_warning "⚠️  初始化失败，将在 10 秒后重试..."
+                    sleep 10
+                fi
+            fi
+        fi
+    done
+    
+    if [ "$init_success" != true ]; then
+        print_error "Node initialization failed after $max_retries attempts"
         print_warning "This may be due to:"
+        print_warning "  - RPC endpoint issues (check URL format)"
         print_warning "  - Node offset already in use (try running script again)"
         print_warning "  - Insufficient SOL for transaction fees"
-        print_warning "  - RPC endpoint issues"
         print_warning "  - Network connectivity problems"
         echo
         print_info "Manual recovery commands:"
         echo -e "  ${YELLOW}cd $WORKSPACE_DIR${NC}"
         echo -e "  ${YELLOW}arcium init-arx-accs --keypair-path $NODE_KEYPAIR --callback-keypair-path $CALLBACK_KEYPAIR --peer-keypair-path $IDENTITY_KEYPAIR --node-offset $NODE_OFFSET --ip-address $PUBLIC_IP --rpc-url $RPC_URL${NC}"
         echo
+        print_warning "💡 如果 RPC URL 有问题，可以手动修改:"
+        echo -e "  ${YELLOW}echo 'https://api.devnet.solana.com' > $RPC_CONFIG_FILE${NC}"
+        echo
         print_warning "Saving progress for manual continuation..."
         save_progress "init_failed"
         exit 1
     fi
-    
-    print_success "Node accounts initialized on-chain"
 }
 
 # Generate cluster offset
