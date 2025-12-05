@@ -373,6 +373,18 @@ save_node_offset() {
 load_node_offset() {
     if [ -f "$OFFSET_FILE" ]; then
         NODE_OFFSET=$(cat "$OFFSET_FILE")
+        
+        # 验证 Offset 是否在有效范围内
+        if [ -n "$NODE_OFFSET" ]; then
+            if [ "$NODE_OFFSET" -gt 2147483647 ] || [ "$NODE_OFFSET" -lt 0 ] 2>/dev/null; then
+                print_warning "⚠️  保存的 Node Offset 超出有效范围: $NODE_OFFSET"
+                print_info "🔄 将重新生成有效的 Node Offset..."
+                NODE_OFFSET=""
+                rm -f "$OFFSET_FILE"
+                return 1
+            fi
+        fi
+        
         print_info "Loaded node offset: $NODE_OFFSET"
     else
         print_warning "No saved node offset found"
@@ -1410,8 +1422,16 @@ fund_accounts() {
 
 # Generate node offset
 generate_node_offset() {
-    # Generate a random 10-digit number
-    NODE_OFFSET=$(shuf -i 1000000000-9999999999 -n 1)
+    # Generate a random number within u32 range (0 to 4294967295)
+    # 使用更小的范围以避免超出类型限制，范围：1000000000 到 2147483647 (i32 max)
+    # 这样可以确保兼容性，同时避免冲突
+    if command -v shuf >/dev/null 2>&1; then
+        NODE_OFFSET=$(shuf -i 1000000000-2147483647 -n 1)
+    else
+        # 如果没有 shuf，使用 RANDOM（范围较小但足够）
+        # RANDOM 最大值是 32767，所以生成 1000000000 到 1000032767
+        NODE_OFFSET=$(( RANDOM % 32768 + 1000000000 ))
+    fi
     print_info "Generated node offset: $NODE_OFFSET"
     save_node_offset
 }
@@ -1424,6 +1444,25 @@ initialize_node_accounts() {
     print_info "IP address: $PUBLIC_IP"
     print_info "RPC endpoint: $RPC_URL"
     print_info "Initializing accounts (this may take a moment)..."
+    
+    # 验证 Node Offset 是否在有效范围内（u32: 0-4294967295，但使用 i32 max: 2147483647 更安全）
+    if [ -n "$NODE_OFFSET" ]; then
+        if [ "$NODE_OFFSET" -gt 2147483647 ] || [ "$NODE_OFFSET" -lt 0 ]; then
+            print_error "❌ Node Offset 超出有效范围: $NODE_OFFSET"
+            print_warning "⚠️  Node Offset 必须在 0 到 2147483647 之间"
+            print_info "🔄 正在重新生成有效的 Node Offset..."
+            
+            # 重新生成 Offset
+            if command -v shuf >/dev/null 2>&1; then
+                NODE_OFFSET=$(shuf -i 1000000000-2147483647 -n 1)
+            else
+                NODE_OFFSET=$(( RANDOM % 32768 + 1000000000 ))
+            fi
+            
+            print_success "✅ 已生成新的 Node Offset: $NODE_OFFSET"
+            save_node_offset
+        fi
+    fi
     
     # 检查 arcium 命令是否存在
     if ! command_exists arcium; then
@@ -1514,8 +1553,28 @@ initialize_node_accounts() {
             print_success "Node accounts initialized on-chain"
             break
         else
+            # 检查是否是 Offset 超出范围错误
+            if echo "$init_output" | grep -qi "number too large\|too large to fit\|invalid value.*node-offset"; then
+                print_error "❌ Node Offset 超出有效范围: $NODE_OFFSET"
+                print_warning "⚠️  Node Offset 必须在 0 到 2147483647 之间"
+                print_info "🔄 正在重新生成有效的 Node Offset..."
+                
+                # 重新生成 Offset
+                if command -v shuf >/dev/null 2>&1; then
+                    NODE_OFFSET=$(shuf -i 1000000000-2147483647 -n 1)
+                else
+                    NODE_OFFSET=$(( RANDOM % 32768 + 1000000000 ))
+                fi
+                
+                print_success "✅ 已生成新的 Node Offset: $NODE_OFFSET"
+                save_node_offset
+                
+                if [ $retry_count -lt $max_retries ]; then
+                    print_info "🔄 将在 5 秒后使用新 Offset 重试..."
+                    sleep 5
+                fi
             # 检查是否是 JSON 解析错误（RPC 端点问题）
-            if echo "$init_output" | grep -q "cannot access key.*in JSON\|JSON array\|serde_json"; then
+            elif echo "$init_output" | grep -q "cannot access key.*in JSON\|JSON array\|serde_json"; then
                 print_error "❌ RPC 端点返回了无效的 JSON 响应"
                 print_warning "⚠️  这通常意味着 RPC URL 格式不正确或端点不可用"
                 print_info "💡 建议："
@@ -1534,6 +1593,7 @@ initialize_node_accounts() {
             else
                 if [ $retry_count -lt $max_retries ]; then
                     print_warning "⚠️  初始化失败，将在 10 秒后重试..."
+                    print_info "错误信息: $init_output"
                     sleep 10
                 fi
             fi
