@@ -1409,21 +1409,21 @@ setup_arx_node() {
         fi
         echo "DEBUG: identity.pem 生成完成" >&2
         
-        # 生成 BLS 密钥对（使用 identity.pem 作为替代，因为 BLS 密钥对格式可能不同）
+        # BLS 密钥对直接使用 node-keypair.json
+        # 根据错误信息，BLS 密钥对需要能够转换为 32 字节数组，Solana JSON 格式应该满足要求
         if [[ ! -f "bls-keypair.json" ]]; then
-            log "生成 BLS 密钥对..."
-            echo "DEBUG: 开始生成 BLS 密钥对" >&2
-            # 尝试使用 solana-keygen 生成 BLS 密钥对
-            # 如果失败，使用 identity.pem 作为替代
-            if solana-keygen new --outfile bls-keypair.json --no-bip39-passphrase --silent --force 2>/dev/null; then
-                echo "DEBUG: BLS 密钥对生成完成" >&2
-                success "BLS 密钥对生成完成"
-            else
-                warning "无法生成独立的 BLS 密钥对，使用 identity.pem 作为替代"
-                cp identity.pem bls-keypair.json
-            fi
+            log "创建 BLS 密钥对（使用 node-keypair.json）..."
+            echo "DEBUG: 使用 node-keypair.json 作为 BLS 密钥对" >&2
+            # 直接使用 node-keypair.json 作为 BLS 密钥对
+            cp node-keypair.json bls-keypair.json
+            success "BLS 密钥对已创建（使用 node-keypair.json）"
         else
             echo "DEBUG: BLS 密钥对已存在" >&2
+            # 验证 BLS 密钥对格式是否正确（应该是 Solana JSON 格式）
+            if ! solana address --keypair bls-keypair.json >/dev/null 2>&1; then
+                warning "BLS 密钥对格式不正确，使用 node-keypair.json 替换..."
+                cp node-keypair.json bls-keypair.json
+            fi
         fi
         
         echo "密钥对生成完成" >&2
@@ -1639,10 +1639,12 @@ setup_arx_node() {
             info "📝 正在将节点账户信息上链，请稍候..."
 
             # 使用新版本必需的参数
-            # 如果 BLS 密钥对不存在，使用 identity.pem 作为替代
-            local bls_keypair_path="identity.pem"
-            if [[ -f "bls-keypair.json" ]]; then
-                bls_keypair_path="bls-keypair.json"
+            # BLS 密钥对需要使用 Solana 格式的 JSON 密钥对
+            local bls_keypair_path="bls-keypair.json"
+            if [[ ! -f "$bls_keypair_path" ]]; then
+                # 如果 BLS 密钥对不存在，使用 node-keypair.json 作为替代
+                bls_keypair_path="node-keypair.json"
+                warning "BLS 密钥对不存在，使用 node-keypair.json 作为替代"
             fi
             
             init_output=$(arcium init-arx-accs \
