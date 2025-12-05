@@ -560,139 +560,6 @@ install_arcium() {
 
 # ========== 新的集群管理函数 ==========
 
-# 备份、删除、重建目录并恢复密钥文件
-backup_and_rebuild_directories() {
-    log "备份、删除、重建目录并恢复密钥文件..."
-    
-    local NODE_DIR="$HOME/arcium-node-setup"
-    local CLUSTER_DIR="$HOME/arcium-cluster-setup"
-    local BACKUP_DIR="$HOME/.arcium-backup-$(date +%s)"
-    local keys_found=false
-    
-    # 创建备份目录
-    mkdir -p "$BACKUP_DIR"
-    log "备份目录: $BACKUP_DIR"
-    
-    # 检测并备份节点密钥文件
-    if [ -f "$NODE_DIR/node-keypair.json" ]; then
-        log "检测到节点密钥文件，正在备份..."
-        cp "$NODE_DIR/node-keypair.json" "$BACKUP_DIR/node-keypair.json" 2>/dev/null && {
-            success "✓ 已备份 node-keypair.json"
-            keys_found=true
-        } || warning "⚠️  备份 node-keypair.json 失败"
-    fi
-    
-    if [ -f "$NODE_DIR/callback-kp.json" ]; then
-        log "检测到回调密钥文件，正在备份..."
-        cp "$NODE_DIR/callback-kp.json" "$BACKUP_DIR/callback-kp.json" 2>/dev/null && {
-            success "✓ 已备份 callback-kp.json"
-            keys_found=true
-        } || warning "⚠️  备份 callback-kp.json 失败"
-    fi
-    
-    if [ -f "$NODE_DIR/identity.pem" ]; then
-        log "检测到身份密钥文件，正在备份..."
-        cp "$NODE_DIR/identity.pem" "$BACKUP_DIR/identity.pem" 2>/dev/null && {
-            success "✓ 已备份 identity.pem"
-            keys_found=true
-        } || warning "⚠️  备份 identity.pem 失败"
-    fi
-    
-    # 备份集群目录中的密钥（如果存在）
-    if [ -f "$CLUSTER_DIR/cluster-owner-keypair.json" ]; then
-        log "检测到集群所有者密钥文件，正在备份..."
-        mkdir -p "$BACKUP_DIR/cluster"
-        cp "$CLUSTER_DIR/cluster-owner-keypair.json" "$BACKUP_DIR/cluster/cluster-owner-keypair.json" 2>/dev/null && {
-            success "✓ 已备份 cluster-owner-keypair.json"
-            keys_found=true
-        } || warning "⚠️  备份 cluster-owner-keypair.json 失败"
-        
-        # 备份集群信息文件（如果存在）
-        if [ -f "$CLUSTER_DIR/cluster-info.txt" ]; then
-            cp "$CLUSTER_DIR/cluster-info.txt" "$BACKUP_DIR/cluster/cluster-info.txt" 2>/dev/null && {
-                success "✓ 已备份 cluster-info.txt"
-            } || warning "⚠️  备份 cluster-info.txt 失败"
-        fi
-    fi
-    
-    if [ "$keys_found" = true ]; then
-        success "✅ 密钥文件备份完成"
-    else
-        info "未检测到密钥文件，跳过备份"
-    fi
-    
-    # 删除现有目录
-    log "删除现有目录..."
-    if [ -d "$NODE_DIR" ]; then
-        log "删除节点目录: $NODE_DIR"
-        rm -rf "$NODE_DIR" && success "✓ 节点目录已删除" || warning "⚠️  删除节点目录失败"
-    else
-        info "节点目录不存在，跳过删除"
-    fi
-    
-    if [ -d "$CLUSTER_DIR" ]; then
-        log "删除集群目录: $CLUSTER_DIR"
-        rm -rf "$CLUSTER_DIR" && success "✓ 集群目录已删除" || warning "⚠️  删除集群目录失败"
-    else
-        info "集群目录不存在，跳过删除"
-    fi
-    
-    # 重新创建目录
-    log "重新创建目录..."
-    mkdir -p "$NODE_DIR" && success "✓ 节点目录已创建: $NODE_DIR" || {
-        error "创建节点目录失败"
-        return 1
-    }
-    
-    mkdir -p "$CLUSTER_DIR" && success "✓ 集群目录已创建: $CLUSTER_DIR" || {
-        error "创建集群目录失败"
-        return 1
-    }
-    
-    # 恢复备份的密钥文件
-    if [ "$keys_found" = true ]; then
-        log "恢复备份的密钥文件..."
-        
-        if [ -f "$BACKUP_DIR/node-keypair.json" ]; then
-            cp "$BACKUP_DIR/node-keypair.json" "$NODE_DIR/node-keypair.json" 2>/dev/null && {
-                success "✓ 已恢复 node-keypair.json"
-            } || warning "⚠️  恢复 node-keypair.json 失败"
-        fi
-        
-        if [ -f "$BACKUP_DIR/callback-kp.json" ]; then
-            cp "$BACKUP_DIR/callback-kp.json" "$NODE_DIR/callback-kp.json" 2>/dev/null && {
-                success "✓ 已恢复 callback-kp.json"
-            } || warning "⚠️  恢复 callback-kp.json 失败"
-        fi
-        
-        if [ -f "$BACKUP_DIR/identity.pem" ]; then
-            cp "$BACKUP_DIR/identity.pem" "$NODE_DIR/identity.pem" 2>/dev/null && {
-                success "✓ 已恢复 identity.pem"
-            } || warning "⚠️  恢复 identity.pem 失败"
-        fi
-        
-        # 恢复集群密钥文件
-        if [ -f "$BACKUP_DIR/cluster/cluster-owner-keypair.json" ]; then
-            cp "$BACKUP_DIR/cluster/cluster-owner-keypair.json" "$CLUSTER_DIR/cluster-owner-keypair.json" 2>/dev/null && {
-                success "✓ 已恢复 cluster-owner-keypair.json"
-            } || warning "⚠️  恢复 cluster-owner-keypair.json 失败"
-        fi
-        
-        if [ -f "$BACKUP_DIR/cluster/cluster-info.txt" ]; then
-            cp "$BACKUP_DIR/cluster/cluster-info.txt" "$CLUSTER_DIR/cluster-info.txt" 2>/dev/null && {
-                success "✓ 已恢复 cluster-info.txt"
-            } || warning "⚠️  恢复 cluster-info.txt 失败"
-        fi
-        
-        success "✅ 密钥文件恢复完成"
-        info "备份文件保存在: $BACKUP_DIR"
-    else
-        info "没有备份文件需要恢复"
-    fi
-    
-    success "✅ 目录重建和密钥恢复完成"
-}
-
 # 修复的集群存在检查函数
 check_cluster_exists() {
     local cluster_offset=$1
@@ -1409,23 +1276,6 @@ setup_arx_node() {
         fi
         echo "DEBUG: identity.pem 生成完成" >&2
         
-        # BLS 密钥对直接使用 node-keypair.json
-        # 根据错误信息，BLS 密钥对需要能够转换为 32 字节数组，Solana JSON 格式应该满足要求
-        if [[ ! -f "bls-keypair.json" ]]; then
-            log "创建 BLS 密钥对（使用 node-keypair.json）..."
-            echo "DEBUG: 使用 node-keypair.json 作为 BLS 密钥对" >&2
-            # 直接使用 node-keypair.json 作为 BLS 密钥对
-            cp node-keypair.json bls-keypair.json
-            success "BLS 密钥对已创建（使用 node-keypair.json）"
-        else
-            echo "DEBUG: BLS 密钥对已存在" >&2
-            # 验证 BLS 密钥对格式是否正确（应该是 Solana JSON 格式）
-            if ! solana address --keypair bls-keypair.json >/dev/null 2>&1; then
-                warning "BLS 密钥对格式不正确，使用 node-keypair.json 替换..."
-                cp node-keypair.json bls-keypair.json
-            fi
-        fi
-        
         echo "密钥对生成完成" >&2
         
         # 获取公钥
@@ -1445,117 +1295,25 @@ setup_arx_node() {
     # 步骤 5/9: 检查余额和领水
     log "步骤 5/9: 检查余额和领水"
     log "检查节点地址余额..."
-    local node_balance=$(solana balance $node_pubkey --url "$RPC_ENDPOINT" 2>/dev/null | cut -d' ' -f1 || echo "0")
+    local node_balance=$(get_address_balance "$node_pubkey")
     success "节点地址当前余额: $node_balance SOL"
     
-    # 如果节点地址余额小于 2.5 SOL，则尝试多种方式获取资金
-    if (( $(echo "$node_balance < 2.5" | bc -l) )); then
-        log "节点地址余额不足，开始获取资金..."
-        local funding_success=false
-        
-        # 方法1: 尝试官方领水
-        log "尝试官方领水..."
-        if solana airdrop 5 $node_pubkey -u devnet 2>/dev/null; then
-            success "官方领水成功，等待到账..."
-            funding_success=true
+    if (( $(echo "$node_balance <= 0" | bc -l) )); then
+        log "节点地址余额为0，将由集群所有者转账补充..."
+        if transfer_from_owner "$node_pubkey" "$NODE_FUNDING_TARGET" "节点地址"; then
+            node_balance=$(get_address_balance "$node_pubkey")
+            success "节点地址已获得注资，当前余额: $node_balance SOL"
         else
-            warning "官方领水失败，尝试集群转账..."
-            
-            # 方法2: 从集群所有者转账
-            local CLUSTER_DIR="$HOME/arcium-cluster-setup"
-            if [[ -f "$CLUSTER_DIR/cluster-owner-keypair.json" ]]; then
-                log "从集群所有者给节点转账 4 SOL..."
-                
-                # 检查集群所有者余额
-                local cluster_owner_address=$(solana address --keypair "$CLUSTER_DIR/cluster-owner-keypair.json")
-                local cluster_balance=$(solana balance $cluster_owner_address --url "$RPC_ENDPOINT" 2>/dev/null | cut -d' ' -f1 || echo "0")
-                success "集群所有者余额: $cluster_balance SOL"
-                
-                if (( $(echo "$cluster_balance >= 4.5" | bc -l) )); then
-                    if solana transfer $node_pubkey 4 --keypair "$CLUSTER_DIR/cluster-owner-keypair.json" --url "$RPC_ENDPOINT" --allow-unfunded-recipient 2>/dev/null; then
-                        success "集群转账成功！"
-                        funding_success=true
-                    else
-                        error "集群转账失败"
-                    fi
-                else
-                    warning "集群所有者余额不足 ($cluster_balance SOL)，无法转账"
-                fi
-            else
-                warning "未找到集群所有者密钥文件"
-            fi
+            warning "自动注资节点地址失败，请稍后手动检查"
         fi
-        
-        # 等待资金到账
-        if [ "$funding_success" = true ]; then
-            success "资金请求已提交，等待到账..."
-            
-            # 等待并检查余额
-            local max_checks=15
-            local check_count=0
-            
-            while [ $check_count -lt $max_checks ]; do
-                sleep 10
-                node_balance=$(solana balance $node_pubkey --url "$RPC_ENDPOINT" 2>/dev/null | cut -d' ' -f1 || echo "0")
-                check_count=$((check_count + 1))
-                
-                if (( $(echo "$node_balance >= 3.5" | bc -l) )); then
-                    success "节点地址资金到账: $node_balance SOL"
-                    break
-                else
-                    info "等待资金到账... ($check_count/$max_checks) 当前余额: $node_balance SOL"
-                fi
-            done
-            
-            if (( $(echo "$node_balance < 3.5" | bc -l) )); then
-                warning "资金未完全到账，当前余额: $node_balance SOL"
-                info "可能因网络延迟，继续等待或需要手动处理"
-            fi
-        else
-            # 所有自动方法都失败，提示手动领水
-            warning "所有自动获取资金方法都失败了"
-            info "请手动访问以下网站领水:"
-            info "https://faucet.solana.com"
-            info "节点地址: $node_pubkey"
-            info "领取至少 5 SOL 后按回车键继续..."
-            read -r </dev/tty
-            
-            # 手动领水后等待余额到账
-            log "等待手动领水到账..."
-            local max_waits=30
-            local wait_count=0
-            
-            while [ $wait_count -lt $max_waits ]; do
-                sleep 20
-                node_balance=$(solana balance $node_pubkey --url "$RPC_ENDPOINT" 2>/dev/null | cut -d' ' -f1 || echo "0")
-                wait_count=$((wait_count + 1))
-                
-                echo "检查余额... ($wait_count/$max_waits) 当前余额: $node_balance SOL" >&2
-                
-                if (( $(echo "$node_balance >= 3.5" | bc -l) )); then
-                    success "领水到账: $node_balance SOL"
-                    break
-                fi
-            done
-            
-            if (( $(echo "$node_balance < 3.5" | bc -l) )); then
-                warning "领水未到账，当前余额: $node_balance SOL"
-                info "请确认已成功领水，按回车键强制继续..."
-                read -r </dev/tty
-            fi
-        fi
-    else
-        success "节点地址余额充足，跳过领水"
     fi
     
-    # === 重新检查余额（领水后可能发生变化）===
-    node_balance=$(solana balance $node_pubkey --url "$RPC_ENDPOINT" 2>/dev/null | cut -d' ' -f1 || echo "0")
-    success "领水后节点地址最终余额: $node_balance SOL"
+    # === 最终确认节点余额 ===
+    node_balance=$(get_address_balance "$node_pubkey")
+    success "注资后节点地址余额: $node_balance SOL"
     
-    # 如果节点余额仍然不足，给出警告但继续
-    if (( $(echo "$node_balance < 3.5" | bc -l) )); then
-        warning "节点地址余额仍然不足 ($node_balance SOL)，可能影响节点运行"
-        info "建议手动补充资金或联系集群所有者"
+    if (( $(echo "$node_balance <= 0" | bc -l) )); then
+        warning "节点地址仍没有余额，可能影响节点运行，建议联系集群所有者补充资金"
     fi
     
     # 检查回调地址余额，决定是否需要转账
@@ -1638,25 +1396,13 @@ setup_arx_node() {
             log "执行 arcium init-arx-accs 命令 (尝试 $((retry_count+1))/$max_retries)..."
             info "📝 正在将节点账户信息上链，请稍候..."
 
-            # 使用新版本必需的参数
-            # BLS 密钥对需要使用 Solana 格式的 JSON 密钥对
-            local bls_keypair_path="bls-keypair.json"
-            if [[ ! -f "$bls_keypair_path" ]]; then
-                # 如果 BLS 密钥对不存在，使用 node-keypair.json 作为替代
-                bls_keypair_path="node-keypair.json"
-                warning "BLS 密钥对不存在，使用 node-keypair.json 作为替代"
-            fi
-            
+            # 使用 --skip-steps 参数跳过已存在的步骤
             init_output=$(arcium init-arx-accs \
                 --keypair-path node-keypair.json \
                 --callback-keypair-path callback-kp.json \
                 --peer-keypair-path identity.pem \
-                --bls-keypair-path "$bls_keypair_path" \
                 --node-offset $node_offset \
                 --ip-address $public_ip \
-                --operator-location "0" \
-                --operator-url "https://arcium.com" \
-                --resource-claim "100000" \
                 --rpc-url "$RPC_ENDPOINT" 2>&1)
             init_rc=$?
             
@@ -1731,20 +1477,107 @@ setup_arx_node() {
         local CLUSTER_DIR="$HOME/arcium-cluster-setup"
         
         if [[ -f "$CLUSTER_DIR/cluster-owner-keypair.json" ]]; then
+            # 先检查集群是否已初始化
+            log "检查集群 $cluster_offset 是否已完全初始化..."
+            local cluster_check_count=0
+            local cluster_ready=false
+            local max_cluster_checks=10
+            
+            while [ $cluster_check_count -lt $max_cluster_checks ]; do
+                if arcium fee-proposals $cluster_offset --rpc-url "$RPC_ENDPOINT" >/dev/null 2>&1; then
+                    cluster_ready=true
+                    success "集群已完全初始化"
+                    break
+                else
+                    cluster_check_count=$((cluster_check_count + 1))
+                    if [ $cluster_check_count -lt $max_cluster_checks ]; then
+                        info "等待集群初始化完成... ($cluster_check_count/$max_cluster_checks)"
+                        sleep 5
+                    fi
+                fi
+            done
+            
+            if [ "$cluster_ready" = false ]; then
+                warning "⚠️ 集群可能尚未完全初始化，但继续尝试邀请..."
+            fi
+            
+            # 等待节点账户完全上链（如果刚初始化）
+            log "等待节点账户完全上链（最多30秒）..."
+            local node_ready_count=0
+            while [ $node_ready_count -lt 6 ]; do
+                if arcium arx-info $node_offset --rpc-url "$RPC_ENDPOINT" >/dev/null 2>&1; then
+                    success "节点账户已可查询"
+                    break
+                else
+                    node_ready_count=$((node_ready_count + 1))
+                    if [ $node_ready_count -lt 6 ]; then
+                        info "等待节点账户上链... ($node_ready_count/6)"
+                        sleep 5
+                    fi
+                fi
+            done
+            
             log "使用集群所有者密钥邀请节点 $node_offset 加入集群 $cluster_offset..."
             
-            if arcium propose-join-cluster \
+            local invite_output
+            invite_output=$(arcium propose-join-cluster \
                 --keypair-path "$CLUSTER_DIR/cluster-owner-keypair.json" \
                 --cluster-offset $cluster_offset \
                 --node-offset $node_offset \
-                --rpc-url "$RPC_ENDPOINT" 2>&1; then
+                --rpc-url "$RPC_ENDPOINT" 2>&1)
+            local invite_rc=$?
+            
+            # 显示邀请命令的输出（用于调试）
+            if [[ -n "$invite_output" ]]; then
+                echo "$invite_output"
+            fi
+            
+            if [ $invite_rc -eq 0 ]; then
                 success "✅ 集群所有者邀请节点成功"
+                # 邀请成功后，等待一段时间让邀请生效
+                log "等待邀请生效（10秒）..."
+                sleep 10
             else
-                warning "⚠️ 自动邀请失败，可能原因："
-                warning "  - 集群所有者密钥不匹配"
-                warning "  - 节点已被邀请"
-                warning "  - 集群已满"
-                info "尝试继续执行加入流程..."
+                # 检查错误类型
+                if echo "$invite_output" | grep -q "AccountNotInitialized\|0xbc4\|3012"; then
+                    warning "⚠️ 集群账户可能尚未完全初始化，等待后重试..."
+                    sleep 10
+                    # 重试一次邀请
+                    local retry_invite_output
+                    retry_invite_output=$(arcium propose-join-cluster \
+                        --keypair-path "$CLUSTER_DIR/cluster-owner-keypair.json" \
+                        --cluster-offset $cluster_offset \
+                        --node-offset $node_offset \
+                        --rpc-url "$RPC_ENDPOINT" 2>&1)
+                    local retry_invite_rc=$?
+                    
+                    if [[ -n "$retry_invite_output" ]]; then
+                        echo "$retry_invite_output"
+                    fi
+                    
+                    if [ $retry_invite_rc -eq 0 ]; then
+                        success "✅ 集群所有者邀请节点成功（重试）"
+                        log "等待邀请生效（10秒）..."
+                        sleep 10
+                    else
+                        warning "⚠️ 自动邀请失败，可能原因："
+                        warning "  - 集群账户尚未完全初始化（需要等待更长时间）"
+                        warning "  - 节点已被邀请"
+                        warning "  - 集群已满"
+                        info "尝试继续执行加入流程..."
+                    fi
+                elif echo "$invite_output" | grep -q "already\|Already"; then
+                    success "✅ 节点已被邀请或已在集群中"
+                    log "等待邀请生效（5秒）..."
+                    sleep 5
+                else
+                    warning "⚠️ 自动邀请失败，可能原因："
+                    warning "  - 集群所有者密钥不匹配"
+                    warning "  - 节点已被邀请"
+                    warning "  - 集群已满"
+                    warning "  - 邀请输出: $invite_output"
+                    info "尝试继续执行加入流程..."
+                fi
             fi
         else
             warning "⚠️ 未找到集群所有者密钥，无法自动邀请"
@@ -1763,17 +1596,29 @@ setup_arx_node() {
 
         while [ $join_retry -lt $max_join_retries ]; do
             log "尝试加入集群 (尝试 $((join_retry+1))/$max_join_retries)..."
+            
             # 每次重试前都检查一次状态
             if check_node_in_cluster "$node_offset" "$cluster_offset"; then
                 success "✅ 节点已在集群中，跳过本次加入尝试"
                 join_success=true
                 break
             fi
-            if arcium join-cluster true \
+            
+            # 尝试加入集群
+            local join_output
+            join_output=$(arcium join-cluster true \
                 --keypair-path node-keypair.json \
                 --node-offset $node_offset \
                 --cluster-offset $cluster_offset \
-                --rpc-url "$RPC_ENDPOINT" 2>&1 | grep -q "success\|already"; then
+                --rpc-url "$RPC_ENDPOINT" 2>&1)
+            local join_rc=$?
+            
+            # 显示加入集群命令的输出（用于调试）
+            if [[ -n "$join_output" ]]; then
+                echo "$join_output"
+            fi
+            
+            if [ $join_rc -eq 0 ] || echo "$join_output" | grep -qi "success\|already\|Success"; then
                 join_success=true
                 success "✅ 成功加入集群 $cluster_offset"
                 break
@@ -1785,12 +1630,31 @@ setup_arx_node() {
                     error "1. 集群管理者尚未邀请本节点"
                     error "2. 集群已满员"
                     error "3. 网络连接问题"
+                    error "4. 节点账户或集群账户尚未完全上链确认"
+                    error "5. 邀请尚未生效（需要等待更长时间）"
+                    if [[ -n "$join_output" ]]; then
+                        error "加入集群错误输出: $join_output"
+                    fi
                     info "请让集群管理者执行以下邀请命令："
                     info "arcium propose-join-cluster --keypair-path <集群管理者密钥> --cluster-offset $cluster_offset --node-offset $node_offset --rpc-url \"$RPC_ENDPOINT\""
+                    info "或者等待更长时间后手动重试加入集群"
+                    info "手动加入命令: arcium join-cluster true --keypair-path node-keypair.json --node-offset $node_offset --cluster-offset $cluster_offset --rpc-url \"$RPC_ENDPOINT\""
                     return 1
                 else
                     warning "加入集群失败，第 $join_retry 次重试..."
-                    sleep 15
+                    if [[ -n "$join_output" ]]; then
+                        warning "错误信息: $join_output"
+                    fi
+                    # 如果节点账户查询失败，等待更长时间
+                    if ! arcium arx-info $node_offset --rpc-url "$RPC_ENDPOINT" >/dev/null 2>&1; then
+                        info "节点账户可能尚未完全上链，等待30秒..."
+                        sleep 30
+                    else
+                        # 根据重试次数调整等待时间（越往后等待越久）
+                        local wait_time=$((15 + join_retry * 5))
+                        info "等待 ${wait_time} 秒后重试（邀请可能需要更多时间生效）..."
+                        sleep $wait_time
+                    fi
                 fi
             fi
         done
@@ -1886,16 +1750,61 @@ EOF
     # 检查节点状态
     log "等待节点启动..."
     sleep 5
+    
+    # 使用重试机制检查容器状态
     log "检查容器是否运行..."
-    if docker ps | grep -q arx-node; then
-        success "Arx 节点容器已启动"
+    local max_checks=6
+    local check_count=0
+    local container_running=false
+    
+    while [ $check_count -lt $max_checks ]; do
+        # 使用多种方法检查容器是否运行
+        local check_result1=false
+        local check_result2=false
+        
+        # 方法1: 使用 docker ps --format
+        if docker ps --format "{{.Names}}" 2>/dev/null | grep -q "^arx-node$"; then
+            check_result1=true
+        fi
+        
+        # 方法2: 使用 docker ps --filter
+        if docker ps --filter "name=arx-node" --format "{{.Names}}" 2>/dev/null | grep -q "^arx-node$"; then
+            check_result2=true
+        fi
+        
+        # 方法3: 使用 docker ps 然后 grep
+        if docker ps 2>/dev/null | grep -q "arx-node"; then
+            check_result1=true
+            check_result2=true
+        fi
+        
+        if [ "$check_result1" = true ] || [ "$check_result2" = true ]; then
+            container_running=true
+            success "Arx 节点容器已启动"
+            break
+        fi
+        
+        check_count=$((check_count + 1))
+        if [ $check_count -lt $max_checks ]; then
+            info "等待容器启动... ($check_count/$max_checks)"
+            sleep 3
+        fi
+    done
+    
+    if [ "$container_running" = true ]; then
         # 添加容器健康状态检查
         log "检查容器详细状态..."
-        if docker compose ps | grep -q "Up"; then
-            success "节点容器运行正常"
+        local container_status=$(docker ps --filter "name=arx-node" --format "{{.Status}}" 2>/dev/null || echo "")
+        if [[ -n "$container_status" ]]; then
+            success "节点容器运行正常: $container_status"
         else
-            warning "节点容器已启动但可能有问题，请检查日志"
+            warning "节点容器已启动但状态信息获取失败，请检查日志"
         fi
+        
+        # 显示容器信息
+        log "容器详细信息:"
+        docker ps --filter "name=arx-node" --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}" 2>/dev/null || true
+        
         success "Arx 节点启动成功！"
         success "节点 Offset: $node_offset"
         success "节点地址: $node_pubkey"
@@ -1903,12 +1812,16 @@ EOF
         success "运行端口: $final_port"
         success "集群 Offset: $cluster_offset"
         log "函数执行完成，返回结果: $node_offset:$actual_port_used"
-        echo "$node_offset:$actual_port_used"
+        # 确保只输出格式化的结果到 stdout，错误信息输出到 stderr
+        echo "$node_offset:$actual_port_used" >&1
         return 0
     else
-        error "节点启动失败，请检查日志"
-        log "检查容器状态: docker ps -a"
-        log "查看容器日志: docker compose logs"
+        error "节点启动失败，容器未运行"
+        log "检查所有容器状态:"
+        docker ps -a --filter "name=arx-node" || true
+        log "查看容器日志（最后50行）:"
+        docker compose logs --tail=50 || docker logs arx-node --tail=50 2>/dev/null || true
+        error "请检查上述错误信息并手动排查问题"
         return 1
     fi
 }
@@ -2308,9 +2221,6 @@ main() {
     echo "  - WSS 端点: $WSS_ENDPOINT"
     echo "  - 集群目录: $CLUSTER_DIR"
     echo
-    
-    # 备份、删除、重建目录并恢复密钥文件
-    backup_and_rebuild_directories
     
     # 先检查和安装组件
     info "检查节点运行所需组件..."
