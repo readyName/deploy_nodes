@@ -527,35 +527,189 @@ install_anchor() {
     fi
 }
 
-# 安装 Arcium - 修改为带重试的版本
-install_arcium() {
-    if ! check_cmd "arcium"; then
-        log "安装 Arcium..."
+# 获取 Arcium 版本号（仅数字部分）
+get_arcium_version() {
+    if check_cmd "arcium"; then
+        local version_output=$(arcium --version 2>/dev/null | head -n1)
+        # 提取版本号，例如 "arcium 0.5.1" -> "0.5.1"
+        echo "$version_output" | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -n1
+    else
+        echo ""
+    fi
+}
+
+# 比较版本号（返回 0 如果 version1 >= version2）
+compare_version() {
+    local version1=$1
+    local version2=$2
+    
+    if [[ "$version1" == "$version2" ]]; then
+        return 0
+    fi
+    
+    local IFS='.'
+    read -ra v1 <<< "$version1"
+    read -ra v2 <<< "$version2"
+    
+    for i in "${!v1[@]}"; do
+        if [[ -z "${v2[i]}" ]]; then
+            return 0
+        fi
+        if ((10#${v1[i]} > 10#${v2[i]})); then
+            return 0
+        fi
+        if ((10#${v1[i]} < 10#${v2[i]})); then
+            return 1
+        fi
+    done
+    
+    return 0
+}
+
+# 检查是否需要迁移（从 0.4.x 到 0.5.1）
+check_migration_needed() {
+    local current_version=$(get_arcium_version)
+    
+    if [[ -z "$current_version" ]]; then
+        return 1  # 未安装，不需要迁移
+    fi
+    
+    # 检查是否是 0.4.x 版本
+    if echo "$current_version" | grep -qE '^0\.4\.'; then
+        return 0  # 需要迁移
+    fi
+    
+    # 检查是否低于 0.5.1
+    if compare_version "0.5.1" "$current_version"; then
+        if ! compare_version "$current_version" "0.5.1"; then
+            return 0  # 需要升级到 0.5.1
+        fi
+    fi
+    
+    return 1  # 不需要迁移
+}
+
+# 迁移从 0.4.x 到 0.5.1
+migrate_to_v0_5_1() {
+    log "检测到需要从 0.4.x 迁移到 0.5.1..."
+    local current_version=$(get_arcium_version)
+    info "当前 Arcium 版本: $current_version"
+    
+    # 检查节点目录是否存在
+    if [[ -d "$NODE_DIR" ]]; then
+        log "检查现有节点配置..."
         
-        # 创建目录 (README 中强调)
-        mkdir -p "$HOME/arcium-node-setup"
-        cd "$HOME/arcium-node-setup"
+        # 检查是否有旧的配置文件需要迁移
+        if [[ -f "$NODE_DIR/node-config.toml" ]]; then
+            log "备份现有配置文件..."
+            cp "$NODE_DIR/node-config.toml" "$NODE_DIR/node-config.toml.backup.$(date +%s)" 2>/dev/null || true
+        fi
         
-        # 使用 README 中的安装命令
-        local max_retries=3
-        local retry_count=0
+        # 检查是否有 Docker 容器在运行
+        if docker ps | grep -q arx-node; then
+            warning "检测到正在运行的节点容器，将在升级后重启"
+            log "停止现有节点容器..."
+            cd "$NODE_DIR" 2>/dev/null && docker compose down 2>/dev/null || true
+        fi
+    fi
+    
+    # 升级 Arcium CLI
+    log "升级 Arcium CLI 到最新版本（0.5.1）..."
+    install_arcium
+    
+    # 验证升级
+    local new_version=$(get_arcium_version)
+    if [[ -n "$new_version" ]]; then
+        success "Arcium 已升级到版本: $new_version"
         
-        while [ $retry_count -lt $max_retries ]; do
-            if curl --proto '=https' --tlsv1.2 -sSfL https://arcium-install.arcium.workers.dev/ | bash; then
-                success "Arcium 安装完成"
-                success "Arcium 版本: $(arcium --version)"
-                success "Arcup 版本: $(arcup --version 2>/dev/null || echo '未安装')"
-                return 0
-            else
-                retry_count=$((retry_count + 1))
-                warning "安装失败，第 $retry_count 次重试..."
-                sleep 5
-            fi
-        done
-        
-        error "Arcium 安装失败，请检查网络连接"
+        # 如果节点目录存在，提示重启节点
+        if [[ -d "$NODE_DIR" ]]; then
+            info "迁移完成！请重新运行脚本以启动节点（使用新版本配置）"
+        fi
+    else
+        error "升级后无法获取版本信息"
         return 1
     fi
+}
+
+# 安装/升级 Arcium 到最新版本（0.5.1）
+install_arcium() {
+    local max_retries=3
+    local retry_count=0
+    local target_version="0.5.1"
+    
+    # 检查是否已安装
+    if check_cmd "arcium"; then
+        local current_version=$(get_arcium_version)
+        
+        if [[ -n "$current_version" ]]; then
+            # 检查是否需要升级
+            if compare_version "$target_version" "$current_version" && ! compare_version "$current_version" "$target_version"; then
+                log "检测到 Arcium 已安装，版本: $current_version"
+                log "升级到最新版本: $target_version"
+            else
+                success "Arcium 已安装，版本: $current_version（已是最新或更新版本）"
+                return 0
+            fi
+        else
+            log "Arcium 已安装但无法获取版本信息，尝试重新安装..."
+        fi
+    else
+        log "安装 Arcium CLI（目标版本: $target_version）..."
+    fi
+    
+    # 创建目录
+    mkdir -p "$HOME/arcium-node-setup"
+    cd "$HOME/arcium-node-setup"
+    
+    # 使用官方安装脚本（会自动安装最新版本）
+    while [ $retry_count -lt $max_retries ]; do
+        if curl --proto '=https' --tlsv1.2 -sSfL https://arcium-install.arcium.workers.dev/ | bash; then
+            # 确保 PATH 包含 Arcium
+            export PATH="$HOME/.local/bin:$PATH"
+            if [[ -d "$HOME/.cargo/bin" ]]; then
+                export PATH="$HOME/.cargo/bin:$PATH"
+            fi
+            
+            # 验证安装
+            sleep 2
+            if check_cmd "arcium"; then
+                local installed_version=$(get_arcium_version)
+                if [[ -n "$installed_version" ]]; then
+                    success "Arcium 安装/升级完成"
+                    success "Arcium 版本: $installed_version"
+                    
+                    # 检查是否达到目标版本
+                    if compare_version "$installed_version" "$target_version"; then
+                        success "✅ 已安装/升级到 v0.5.1 或更高版本"
+                    else
+                        warning "⚠️  当前版本 ($installed_version) 低于目标版本 ($target_version)"
+                        warning "可能需要手动升级或等待官方更新"
+                    fi
+                    
+                    # 显示 Arcup 版本（如果可用）
+                    if check_cmd "arcup"; then
+                        success "Arcup 版本: $(arcup --version 2>/dev/null || echo '未安装')"
+                    fi
+                    
+                    return 0
+                else
+                    warning "安装成功但无法获取版本信息"
+                    return 0
+                fi
+            else
+                warning "安装完成但 arcium 命令不可用，可能需要重新加载 shell"
+                return 0
+            fi
+        else
+            retry_count=$((retry_count + 1))
+            warning "安装失败，第 $retry_count 次重试..."
+            sleep 5
+        fi
+    done
+    
+    error "Arcium 安装失败，请检查网络连接"
+    return 1
 }
 
 # ========== 新的集群管理函数 ==========
@@ -2225,8 +2379,26 @@ main() {
     # 先检查和安装组件
     info "检查节点运行所需组件..."
     local skip_install=false
+    
+    # 检查是否需要从 0.4.x 迁移到 0.5.1
+    if check_cmd "arcium" && check_migration_needed; then
+        warning "检测到需要从 0.4.x 迁移到 0.5.1"
+        if migrate_to_v0_5_1; then
+            success "迁移完成"
+        else
+            error "迁移失败，请手动处理"
+            return 1
+        fi
+    fi
+    
     if check_cmd "solana" && check_cmd "arcium" && check_cmd "docker" && check_cmd "anchor"; then
-        success "所有必需组件已安装，跳过安装步骤"
+        local arcium_version=$(get_arcium_version)
+        if [[ -n "$arcium_version" ]]; then
+            success "所有必需组件已安装"
+            info "Arcium 版本: $arcium_version"
+            # 确保是最新版本（即使已安装也检查升级）
+            install_arcium
+        fi
         skip_install=true
     fi
 
