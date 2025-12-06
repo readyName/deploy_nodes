@@ -293,6 +293,65 @@ ensure_owner_balance() {
     done
 }
 
+# 为地址无限重试领水（使用代理）
+ensure_address_balance_with_airdrop() {
+    local target_address=$1
+    local target_balance=$2
+    local label=${3:-"目标地址"}
+    
+    local current_balance=$(get_address_balance "$target_address")
+    
+    # 如果已有足够余额，直接返回
+    if (( $(echo "$current_balance >= $target_balance" | bc -l) )); then
+        success "$label 已有足够余额: $current_balance SOL"
+        restore_proxy
+        return 0
+    fi
+    
+    warning "$label 余额不足 ($current_balance SOL)，需要至少 $target_balance SOL，开始无限重试领水..."
+    
+    # 设置代理用于领水
+    if [[ "$USE_PROXY_FOR_AIRDROP" == "true" ]] && [[ -n "$AIRDROP_PROXY" ]]; then
+        setup_proxy "$AIRDROP_PROXY"
+    fi
+    
+    local attempt=0
+    while true; do
+        attempt=$((attempt + 1))
+        
+        if [[ "$USE_PROXY_FOR_AIRDROP" == "true" ]] && [[ -n "$AIRDROP_PROXY" ]]; then
+            log "尝试为 $label 申请空投 (第 $attempt 次，使用代理，代理将自动切换IP)..."
+        else
+            log "尝试为 $label 申请空投 (第 $attempt 次，不使用代理)..."
+        fi
+        
+        if solana airdrop 5 "$target_address" -u devnet 2>/dev/null; then
+            success "空投请求已提交，等待到账..."
+            restore_proxy
+            break
+        else
+            warning "空投失败，10秒后重试（代理将自动切换IP）..."
+            sleep 10
+        fi
+    done
+    
+    # 确保恢复代理
+    restore_proxy
+    
+    # 等待余额到账
+    wait_for_balance "$target_address" "$target_balance" "$label" 24 || true
+    
+    # 最终检查
+    current_balance=$(get_address_balance "$target_address")
+    if (( $(echo "$current_balance >= $target_balance" | bc -l) )); then
+        success "$label 余额已充足: $current_balance SOL"
+        return 0
+    else
+        warning "$label 余额仍不足: $current_balance SOL（目标: $target_balance SOL）"
+        return 1
+    fi
+}
+
 # 从集群所有者向目标地址转账
 transfer_from_owner() {
     local target_address=$1
@@ -318,6 +377,8 @@ transfer_from_owner() {
     local owner_balance=$(get_address_balance "$owner_address")
     if (( $(echo "$owner_balance < $required_balance" | bc -l) )); then
         warning "集群所有者余额 ($owner_balance SOL) 可能不足以转账 $amount SOL"
+        # 如果余额不足，返回失败，让调用者尝试领水
+        return 1
     fi
 
     log "从集群所有者向 $label 转账 $amount SOL..."
@@ -327,8 +388,6 @@ transfer_from_owner() {
         return 0
     else
         error "向 $label 转账失败，请检查网络或账户状态"
-        info "10 秒后继续执行剩余流程..."
-        sleep 10
         return 1
     fi
 }
@@ -1478,67 +1537,85 @@ setup_arx_node() {
     local node_balance=$(get_address_balance "$node_pubkey")
     success "节点地址当前余额: $node_balance SOL"
     
-    if (( $(echo "$node_balance <= 0" | bc -l) )); then
-        log "节点地址余额为0，将由集群所有者转账补充..."
-        if transfer_from_owner "$node_pubkey" "$NODE_FUNDING_TARGET" "节点地址"; then
+    # 如果节点地址余额不足，尝试多种方式获取资金
+    if (( $(echo "$node_balance < $NODE_FUNDING_TARGET" | bc -l) )); then
+        log "节点地址余额不足，尝试获取资金..."
+        local funding_success=false
+        
+        # 方法1: 尝试从集群所有者转账
+        if transfer_from_owner "$node_pubkey" "$NODE_FUNDING_TARGET" "节点地址" 2>/dev/null; then
             node_balance=$(get_address_balance "$node_pubkey")
-            success "节点地址已获得注资，当前余额: $node_balance SOL"
-        else
-            warning "自动注资节点地址失败，请稍后手动检查"
+            if (( $(echo "$node_balance >= $NODE_FUNDING_TARGET" | bc -l) )); then
+                success "节点地址已通过集群转账获得资金: $node_balance SOL"
+                funding_success=true
+            fi
         fi
+        
+        # 方法2: 如果转账失败或余额仍不足，尝试无限重试领水
+        if [ "$funding_success" = false ]; then
+            log "集群转账失败或余额仍不足，尝试无限重试领水..."
+            if ensure_address_balance_with_airdrop "$node_pubkey" "$NODE_FUNDING_TARGET" "节点地址"; then
+                funding_success=true
+            fi
+        fi
+        
+        if [ "$funding_success" = false ]; then
+            warning "节点地址资金获取失败，但继续执行..."
+        fi
+    else
+        success "节点地址余额充足: $node_balance SOL"
     fi
     
     # === 最终确认节点余额 ===
     node_balance=$(get_address_balance "$node_pubkey")
     success "注资后节点地址余额: $node_balance SOL"
     
-    if (( $(echo "$node_balance <= 0" | bc -l) )); then
-        warning "节点地址仍没有余额，可能影响节点运行，建议联系集群所有者补充资金"
-    fi
-    
     # 检查回调地址余额，决定是否需要转账
     log "检查回调地址余额..."
-    local callback_balance=$(solana balance $callback_pubkey --url "$RPC_ENDPOINT" 2>/dev/null | cut -d' ' -f1 || echo "0")
+    local callback_balance=$(get_address_balance "$callback_pubkey")
     success "回调地址当前余额: $callback_balance SOL"
     
-    # 如果回调地址余额小于 0.5 SOL，且节点地址有足够余额，则转账
-    if (( $(echo "$callback_balance < 0.5" | bc -l) )); then
-        # 调整判断条件：节点余额至少需要 1 SOL（转账 1 SOL + gas 费）
+    # 如果回调地址余额小于目标值，尝试多种方式获取资金
+    if (( $(echo "$callback_balance < $CALLBACK_FUNDING_TARGET" | bc -l) )); then
+        log "回调地址余额不足，尝试获取资金..."
+        local callback_funding_success=false
+        
+        # 方法1: 如果节点地址有足够余额，从节点地址转账
         if (( $(echo "$node_balance >= 1.1" | bc -l) )); then
-            log "回调地址余额不足，从节点地址转账 1 SOL..."
+            log "从节点地址向回调地址转账 1 SOL..."
             if solana transfer $callback_pubkey 1 --keypair node-keypair.json --url "$RPC_ENDPOINT" --allow-unfunded-recipient 2>/dev/null; then
                 success "转账成功，等待回调地址到账..."
-                
-                # 等待回调地址到账
-                local callback_checks=0
-                log "开始等待回调地址到账，最大检查次数: 5"
-                while [ $callback_checks -lt 5 ]; do
-                    sleep 5
-                    callback_balance=$(solana balance $callback_pubkey --url "$RPC_ENDPOINT" 2>/dev/null | cut -d' ' -f1 || echo "0")
-                    callback_checks=$((callback_checks + 1))
-                    
-                    if (( $(echo "$callback_balance >= 0.5" | bc -l) )); then
-                        success "回调地址资金到位: $callback_balance SOL"
-                        break
-                    else
-                        info "等待回调地址到账... ($callback_checks/5) 当前余额: $callback_balance SOL"
-                    fi
-                done
-            else
-                warning "转账失败，请手动处理"
-                info "手动执行: solana transfer $callback_pubkey 1 --keypair node-keypair.json --url \"$RPC_ENDPOINT\" --allow-unfunded-recipient"
-                info "按回车键继续..."
-                read -r
+                wait_for_balance "$callback_pubkey" "$CALLBACK_FUNDING_TARGET" "回调地址" 10 || true
+                callback_balance=$(get_address_balance "$callback_pubkey")
+                if (( $(echo "$callback_balance >= $CALLBACK_FUNDING_TARGET" | bc -l) )); then
+                    callback_funding_success=true
+                fi
             fi
-        else
-            warning "节点地址余额不足 ($node_balance SOL)，无法给回调地址转账"
-            info "回调地址需要至少 0.5 SOL 才能运行节点"
-            # 这里不返回错误，让用户决定是否继续
-            info "按回车键继续（节点可能无法正常运行）..."
-            read -r
+        fi
+        
+        # 方法2: 如果节点转账失败或余额仍不足，尝试从集群所有者转账
+        if [ "$callback_funding_success" = false ]; then
+            if transfer_from_owner "$callback_pubkey" "$CALLBACK_FUNDING_TARGET" "回调地址" 2>/dev/null; then
+                callback_balance=$(get_address_balance "$callback_pubkey")
+                if (( $(echo "$callback_balance >= $CALLBACK_FUNDING_TARGET" | bc -l) )); then
+                    callback_funding_success=true
+                fi
+            fi
+        fi
+        
+        # 方法3: 如果转账都失败，尝试无限重试领水
+        if [ "$callback_funding_success" = false ]; then
+            log "转账失败，尝试无限重试领水..."
+            if ensure_address_balance_with_airdrop "$callback_pubkey" "$CALLBACK_FUNDING_TARGET" "回调地址"; then
+                callback_funding_success=true
+            fi
+        fi
+        
+        if [ "$callback_funding_success" = false ]; then
+            warning "回调地址资金获取失败，但继续执行..."
         fi
     else
-        success "回调地址余额充足，跳过转账"
+        success "回调地址余额充足: $callback_balance SOL"
     fi
     
     # 最终检查回调地址余额
