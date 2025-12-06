@@ -1543,19 +1543,28 @@ setup_arx_node() {
         local funding_success=false
         
         # 方法1: 尝试从集群所有者转账
-        if transfer_from_owner "$node_pubkey" "$NODE_FUNDING_TARGET" "节点地址" 2>/dev/null; then
+        log "尝试从集群所有者转账..."
+        if transfer_from_owner "$node_pubkey" "$NODE_FUNDING_TARGET" "节点地址"; then
             node_balance=$(get_address_balance "$node_pubkey")
             if (( $(echo "$node_balance >= $NODE_FUNDING_TARGET" | bc -l) )); then
                 success "节点地址已通过集群转账获得资金: $node_balance SOL"
                 funding_success=true
+            else
+                warning "转账后余额仍不足: $node_balance SOL"
             fi
+        else
+            warning "集群所有者转账失败，将尝试领水..."
         fi
         
         # 方法2: 如果转账失败或余额仍不足，尝试无限重试领水
         if [ "$funding_success" = false ]; then
-            log "集群转账失败或余额仍不足，尝试无限重试领水..."
+            log "集群转账失败或余额仍不足，尝试无限重试领水（使用代理）..."
             if ensure_address_balance_with_airdrop "$node_pubkey" "$NODE_FUNDING_TARGET" "节点地址"; then
-                funding_success=true
+                node_balance=$(get_address_balance "$node_pubkey")
+                if (( $(echo "$node_balance >= $NODE_FUNDING_TARGET" | bc -l) )); then
+                    success "节点地址已通过领水获得资金: $node_balance SOL"
+                    funding_success=true
+                fi
             fi
         fi
         
@@ -1569,6 +1578,14 @@ setup_arx_node() {
     # === 最终确认节点余额 ===
     node_balance=$(get_address_balance "$node_pubkey")
     success "注资后节点地址余额: $node_balance SOL"
+    
+    # 如果余额仍然不足，给出明确提示
+    if (( $(echo "$node_balance < $NODE_FUNDING_TARGET" | bc -l) )); then
+        error "节点地址余额不足 ($node_balance SOL < $NODE_FUNDING_TARGET SOL)，无法继续部署"
+        error "请手动为节点地址领水或补充资金"
+        error "节点地址: $node_pubkey"
+        return 1
+    fi
     
     # 检查回调地址余额，决定是否需要转账
     log "检查回调地址余额..."
@@ -1616,6 +1633,18 @@ setup_arx_node() {
         fi
     else
         success "回调地址余额充足: $callback_balance SOL"
+    fi
+    
+    # === 最终确认回调地址余额 ===
+    callback_balance=$(get_address_balance "$callback_pubkey")
+    success "注资后回调地址余额: $callback_balance SOL"
+    
+    # 如果余额仍然不足，给出明确提示
+    if (( $(echo "$callback_balance < $CALLBACK_FUNDING_TARGET" | bc -l) )); then
+        error "回调地址余额不足 ($callback_balance SOL < $CALLBACK_FUNDING_TARGET SOL)，无法运行节点"
+        error "请手动为回调地址领水或补充资金"
+        error "回调地址: $callback_pubkey"
+        return 1
     fi
     
     # 最终检查回调地址余额
