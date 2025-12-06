@@ -1377,6 +1377,17 @@ setup_arx_node() {
         keys_valid=false
     fi
     
+    # 检查 BLS 密钥对（v0.5.1 必需）
+    if [[ -f "bls-keypair.json" ]]; then
+        if ! solana address --keypair bls-keypair.json >/dev/null 2>&1; then
+            echo "DEBUG: bls-keypair.json 文件损坏" >&2
+            keys_valid=false
+        fi
+    else
+        echo "DEBUG: bls-keypair.json 文件不存在" >&2
+        keys_valid=false
+    fi
+    
     echo "DEBUG: 所有密钥文件是否有效: $keys_valid" >&2
     
     if [ "$keys_valid" = true ]; then
@@ -1404,6 +1415,11 @@ setup_arx_node() {
             cp identity.pem identity.pem.backup
         fi
         
+        if [[ -f "bls-keypair.json" ]]; then
+            warning "bls-keypair.json 已存在，创建备份..."
+            cp bls-keypair.json bls-keypair.json.backup
+        fi
+        
         # 使用 --force 标志生成密钥
         log "生成 node-keypair.json..."
         log "生成 node-keypair.json..."
@@ -1429,6 +1445,16 @@ setup_arx_node() {
             return 1
         fi
         echo "DEBUG: identity.pem 生成完成" >&2
+        
+        # 生成 BLS 密钥对（v0.5.1 必需）
+        log "生成 BLS 密钥对（bls-keypair.json）..."
+        echo "DEBUG: 开始生成 BLS 密钥对" >&2
+        if ! solana-keygen new --outfile bls-keypair.json --no-bip39-passphrase --silent --force; then
+            error "生成 bls-keypair.json 失败"
+            return 1
+        fi
+        echo "DEBUG: bls-keypair.json 生成完成" >&2
+        success "BLS 密钥对生成完成"
         
         echo "密钥对生成完成" >&2
         
@@ -1550,13 +1576,24 @@ setup_arx_node() {
             log "执行 arcium init-arx-accs 命令 (尝试 $((retry_count+1))/$max_retries)..."
             info "📝 正在将节点账户信息上链，请稍候..."
 
-            # 使用 --skip-steps 参数跳过已存在的步骤
+            # v0.5.1 需要 BLS 密钥对参数
+            local bls_keypair_path="bls-keypair.json"
+            if [[ ! -f "$bls_keypair_path" ]]; then
+                error "BLS 密钥对文件不存在: $bls_keypair_path"
+                error "请确保已生成所有必需的密钥文件"
+                return 1
+            fi
+            
             init_output=$(arcium init-arx-accs \
                 --keypair-path node-keypair.json \
                 --callback-keypair-path callback-kp.json \
                 --peer-keypair-path identity.pem \
+                --bls-keypair-path "$bls_keypair_path" \
                 --node-offset $node_offset \
                 --ip-address $public_ip \
+                --operator-location "0" \
+                --operator-url "https://arcium.com" \
+                --resource-claim "100000" \
                 --rpc-url "$RPC_ENDPOINT" 2>&1)
             init_rc=$?
             
