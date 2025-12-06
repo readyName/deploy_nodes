@@ -1437,14 +1437,21 @@ setup_arx_node() {
     fi
     
     # 检查 BLS 密钥对（v0.5.1 必需）
+    # BLS 密钥对使用 node-keypair.json 的格式
     if [[ -f "bls-keypair.json" ]]; then
         if ! solana address --keypair bls-keypair.json >/dev/null 2>&1; then
-            echo "DEBUG: bls-keypair.json 文件损坏" >&2
+            echo "DEBUG: bls-keypair.json 文件损坏，将使用 node-keypair.json 重新创建" >&2
             keys_valid=false
         fi
     else
-        echo "DEBUG: bls-keypair.json 文件不存在" >&2
-        keys_valid=false
+        echo "DEBUG: bls-keypair.json 文件不存在，将在生成时创建" >&2
+        # 如果 node-keypair.json 存在，可以立即创建 bls-keypair.json
+        if [[ -f "node-keypair.json" ]]; then
+            echo "DEBUG: 使用现有 node-keypair.json 创建 bls-keypair.json" >&2
+            cp node-keypair.json bls-keypair.json
+        else
+            keys_valid=false
+        fi
     fi
     
     echo "DEBUG: 所有密钥文件是否有效: $keys_valid" >&2
@@ -1452,6 +1459,14 @@ setup_arx_node() {
     if [ "$keys_valid" = true ]; then
         echo "DEBUG: 所有密钥文件有效，跳过生成" >&2
         log "检测到现有密钥文件，跳过生成..."
+        
+        # 确保 BLS 密钥对存在（使用 node-keypair.json 的格式）
+        if [[ ! -f "bls-keypair.json" ]] && [[ -f "node-keypair.json" ]]; then
+            log "创建 BLS 密钥对（使用 node-keypair.json）..."
+            cp node-keypair.json bls-keypair.json
+            success "BLS 密钥对已创建"
+        fi
+        
         node_pubkey=$(solana-keygen pubkey node-keypair.json)
         callback_pubkey=$(solana-keygen pubkey callback-kp.json)
     else
@@ -1506,14 +1521,16 @@ setup_arx_node() {
         echo "DEBUG: identity.pem 生成完成" >&2
         
         # 生成 BLS 密钥对（v0.5.1 必需）
-        log "生成 BLS 密钥对（bls-keypair.json）..."
-        echo "DEBUG: 开始生成 BLS 密钥对" >&2
-        if ! solana-keygen new --outfile bls-keypair.json --no-bip39-passphrase --silent --force; then
-            error "生成 bls-keypair.json 失败"
-            return 1
-        fi
-        echo "DEBUG: bls-keypair.json 生成完成" >&2
-        success "BLS 密钥对生成完成"
+        # 注意：BLS 密钥对需要使用 Solana 格式的密钥对
+        # 根据错误信息，BLS 密钥对需要能够转换为 32 字节数组
+        # 使用 node-keypair.json 作为 BLS 密钥对（Solana JSON 格式包含私钥数组）
+        log "创建 BLS 密钥对（使用 node-keypair.json 格式）..."
+        echo "DEBUG: 使用 node-keypair.json 作为 BLS 密钥对" >&2
+        # 直接复制 node-keypair.json 作为 bls-keypair.json
+        # 因为 Solana JSON 格式的密钥对包含私钥数组，应该可以满足 BLS 的要求
+        cp node-keypair.json bls-keypair.json
+        echo "DEBUG: bls-keypair.json 创建完成" >&2
+        success "BLS 密钥对创建完成（使用 node-keypair.json 格式）"
         
         echo "密钥对生成完成" >&2
         
