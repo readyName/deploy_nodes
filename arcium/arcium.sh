@@ -1700,18 +1700,40 @@ setup_arx_node() {
             info "📝 正在将节点账户信息上链，请稍候..."
 
             # v0.5.1 需要 BLS 密钥对参数
+            # 确保在正确的目录中
+            local current_dir=$(pwd)
+            log "当前工作目录: $current_dir"
+            
             local bls_keypair_path="bls-keypair.json"
             if [[ ! -f "$bls_keypair_path" ]]; then
-                error "BLS 密钥对文件不存在: $bls_keypair_path"
-                error "请确保已生成所有必需的密钥文件"
+                warning "BLS 密钥对文件不存在，尝试创建..."
+                # 如果 node-keypair.json 存在，使用它创建 BLS 密钥对
+                if [[ -f "node-keypair.json" ]]; then
+                    log "使用 node-keypair.json 创建 BLS 密钥对..."
+                    cp node-keypair.json "$bls_keypair_path"
+                    success "BLS 密钥对已创建: $bls_keypair_path"
+                else
+                    error "BLS 密钥对文件不存在且无法创建: $bls_keypair_path"
+                    error "请确保已生成所有必需的密钥文件"
+                    return 1
+                fi
+            fi
+            
+            # 验证 BLS 密钥对文件是否可读
+            if [[ ! -r "$bls_keypair_path" ]]; then
+                error "BLS 密钥对文件不可读: $bls_keypair_path"
                 return 1
             fi
+            
+            # 使用绝对路径确保文件能被找到
+            local abs_bls_path=$(realpath "$bls_keypair_path" 2>/dev/null || echo "$(pwd)/$bls_keypair_path")
+            log "使用 BLS 密钥对路径: $abs_bls_path"
             
             init_output=$(arcium init-arx-accs \
                 --keypair-path node-keypair.json \
                 --callback-keypair-path callback-kp.json \
                 --peer-keypair-path identity.pem \
-                --bls-keypair-path "$bls_keypair_path" \
+                --bls-keypair-path "$abs_bls_path" \
                 --node-offset $node_offset \
                 --ip-address $public_ip \
                 --operator-location "0" \
