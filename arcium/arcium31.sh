@@ -961,88 +961,190 @@ setup_arx_node() {
     
     # 生成密钥对
     echo "生成节点密钥对..." >&2
-    # 检查密钥是否已存在，如果存在则跳过生成
-    echo "DEBUG: 检查密钥文件是否存在且格式正确..." >&2
     
-    local keys_valid=true
+    # 定义备份目录和密钥文件
+    local BACKUP_DIR="$HOME/.arcium-keys-backup"
+    local backup_timestamp=$(date +%Y%m%d_%H%M%S)
     
+    # 创建备份目录
+    mkdir -p "$BACKUP_DIR"
+    log "备份目录: $BACKUP_DIR"
+    
+    # 备份和恢复函数
+    backup_keypair() {
+        local key_file=$1
+        local backup_file="$BACKUP_DIR/${key_file}.${backup_timestamp}"
+        
+        if [[ -f "$key_file" ]]; then
+            log "备份 $key_file 到 $backup_file..."
+            cp "$key_file" "$backup_file" 2>/dev/null && {
+                success "✓ 已备份 $key_file"
+                # 同时创建最新备份（不带时间戳）
+                cp "$key_file" "$BACKUP_DIR/${key_file}.latest" 2>/dev/null || true
+                return 0
+            } || {
+                warning "⚠️  备份 $key_file 失败"
+                return 1
+            }
+        fi
+        return 0
+    }
+    
+    restore_keypair() {
+        local key_file=$1
+        local backup_file="$BACKUP_DIR/${key_file}.latest"
+        
+        if [[ -f "$backup_file" ]]; then
+            log "从备份恢复 $key_file..."
+            cp "$backup_file" "$key_file" 2>/dev/null && {
+                success "✓ 已从备份恢复 $key_file"
+                return 0
+            } || {
+                warning "⚠️  恢复 $key_file 失败"
+                return 1
+            }
+        fi
+        return 1
+    }
+    
+    # 检查并处理每个密钥文件
+    local node_key_valid=false
+    local callback_key_valid=false
+    local identity_key_valid=false
+    
+    # 检查 node-keypair.json
     if [[ -f "node-keypair.json" ]]; then
-        if ! solana address --keypair node-keypair.json >/dev/null 2>&1; then
+        if solana address --keypair node-keypair.json >/dev/null 2>&1; then
+            echo "DEBUG: node-keypair.json 文件有效" >&2
+            node_key_valid=true
+            # 备份有效的密钥文件
+            backup_keypair "node-keypair.json"
+        else
             echo "DEBUG: node-keypair.json 文件损坏" >&2
-            keys_valid=false
+            # 尝试从备份恢复
+            if restore_keypair "node-keypair.json"; then
+                if solana address --keypair node-keypair.json >/dev/null 2>&1; then
+                    node_key_valid=true
+                    success "✓ 从备份恢复的 node-keypair.json 有效"
+                fi
+            fi
         fi
     else
         echo "DEBUG: node-keypair.json 文件不存在" >&2
-        keys_valid=false
+        # 尝试从备份恢复
+        if restore_keypair "node-keypair.json"; then
+            if solana address --keypair node-keypair.json >/dev/null 2>&1; then
+                node_key_valid=true
+                success "✓ 从备份恢复的 node-keypair.json 有效"
+            fi
+        fi
     fi
     
+    # 检查 callback-kp.json
     if [[ -f "callback-kp.json" ]]; then
-        if ! solana address --keypair callback-kp.json >/dev/null 2>&1; then
+        if solana address --keypair callback-kp.json >/dev/null 2>&1; then
+            echo "DEBUG: callback-kp.json 文件有效" >&2
+            callback_key_valid=true
+            # 备份有效的密钥文件
+            backup_keypair "callback-kp.json"
+        else
             echo "DEBUG: callback-kp.json 文件损坏" >&2
-            keys_valid=false
+            # 尝试从备份恢复
+            if restore_keypair "callback-kp.json"; then
+                if solana address --keypair callback-kp.json >/dev/null 2>&1; then
+                    callback_key_valid=true
+                    success "✓ 从备份恢复的 callback-kp.json 有效"
+                fi
+            fi
         fi
     else
         echo "DEBUG: callback-kp.json 文件不存在" >&2
-        keys_valid=false
+        # 尝试从备份恢复
+        if restore_keypair "callback-kp.json"; then
+            if solana address --keypair callback-kp.json >/dev/null 2>&1; then
+                callback_key_valid=true
+                success "✓ 从备份恢复的 callback-kp.json 有效"
+            fi
+        fi
     fi
     
-    if [[ ! -f "identity.pem" ]]; then
+    # 检查 identity.pem
+    if [[ -f "identity.pem" ]]; then
+        # 验证 PEM 格式
+        if openssl pkey -in identity.pem -noout >/dev/null 2>&1; then
+            echo "DEBUG: identity.pem 文件有效" >&2
+            identity_key_valid=true
+            # 备份有效的密钥文件
+            backup_keypair "identity.pem"
+        else
+            echo "DEBUG: identity.pem 文件损坏" >&2
+            # 尝试从备份恢复
+            if restore_keypair "identity.pem"; then
+                if openssl pkey -in identity.pem -noout >/dev/null 2>&1; then
+                    identity_key_valid=true
+                    success "✓ 从备份恢复的 identity.pem 有效"
+                fi
+            fi
+        fi
+    else
         echo "DEBUG: identity.pem 文件不存在" >&2
-        keys_valid=false
+        # 尝试从备份恢复
+        if restore_keypair "identity.pem"; then
+            if openssl pkey -in identity.pem -noout >/dev/null 2>&1; then
+                identity_key_valid=true
+                success "✓ 从备份恢复的 identity.pem 有效"
+            fi
+        fi
     fi
     
-    echo "DEBUG: 所有密钥文件是否有效: $keys_valid" >&2
-    
-    if [ "$keys_valid" = true ]; then
+    # 如果所有密钥都有效，跳过生成
+    if [ "$node_key_valid" = true ] && [ "$callback_key_valid" = true ] && [ "$identity_key_valid" = true ]; then
         echo "DEBUG: 所有密钥文件有效，跳过生成" >&2
-        log "检测到现有密钥文件，跳过生成..."
+        log "检测到现有密钥文件（或从备份恢复），跳过生成..."
         node_pubkey=$(solana-keygen pubkey node-keypair.json)
         callback_pubkey=$(solana-keygen pubkey callback-kp.json)
     else
-        echo "DEBUG: 有密钥文件缺失或损坏，进入生成分支" >&2
-        echo "DEBUG: 有密钥文件缺失，进入生成分支" >&2
+        echo "DEBUG: 有密钥文件缺失或损坏，需要生成" >&2
         
-        # 检查文件是否已存在，如果存在则备份
-        if [[ -f "node-keypair.json" ]]; then
-            warning "node-keypair.json 已存在，创建备份..."
-            cp node-keypair.json node-keypair.json.backup
+        # 生成缺失或损坏的密钥
+        if [ "$node_key_valid" = false ]; then
+            log "生成 node-keypair.json..."
+            echo "DEBUG: 开始生成 node-keypair.json" >&2
+            if ! solana-keygen new --outfile node-keypair.json --no-bip39-passphrase --silent --force; then
+                error "生成 node-keypair.json 失败"
+                return 1
+            fi
+            echo "DEBUG: node-keypair.json 生成完成" >&2
+            # 备份新生成的密钥
+            backup_keypair "node-keypair.json"
+            success "节点密钥对生成并备份完成"
         fi
-        
-        if [[ -f "callback-kp.json" ]]; then
-            warning "callback-kp.json 已存在，创建备份..."
-            cp callback-kp.json callback-kp.json.backup
-        fi
-        
-        if [[ -f "identity.pem" ]]; then
-            warning "identity.pem 已存在，创建备份..."
-            cp identity.pem identity.pem.backup
-        fi
-        
-        # 使用 --force 标志生成密钥
-        log "生成 node-keypair.json..."
-        log "生成 node-keypair.json..."
-        echo "DEBUG: 开始生成 node-keypair.json" >&2
-        if ! solana-keygen new --outfile node-keypair.json --no-bip39-passphrase --silent --force; then
-            error "生成 node-keypair.json 失败"
-            return 1
-        fi
-        echo "DEBUG: node-keypair.json 生成完成" >&2
 
-        log "生成 callback-kp.json..." 
-        echo "DEBUG: 开始生成 callback-kp.json" >&2
-        if ! solana-keygen new --outfile callback-kp.json --no-bip39-passphrase --silent --force; then
-            error "生成 callback-kp.json 失败"
-            return 1
+        if [ "$callback_key_valid" = false ]; then
+            log "生成 callback-kp.json..." 
+            echo "DEBUG: 开始生成 callback-kp.json" >&2
+            if ! solana-keygen new --outfile callback-kp.json --no-bip39-passphrase --silent --force; then
+                error "生成 callback-kp.json 失败"
+                return 1
+            fi
+            echo "DEBUG: callback-kp.json 生成完成" >&2
+            # 备份新生成的密钥
+            backup_keypair "callback-kp.json"
+            success "回调密钥对生成并备份完成"
         fi
-        echo "DEBUG: callback-kp.json 生成完成" >&2
 
-        log "生成 identity.pem..."
-        echo "DEBUG: 开始生成 identity.pem" >&2
-        if ! openssl genpkey -algorithm Ed25519 -out identity.pem; then
-            error "生成 identity.pem 失败"
-            return 1
+        if [ "$identity_key_valid" = false ]; then
+            log "生成 identity.pem..."
+            echo "DEBUG: 开始生成 identity.pem" >&2
+            if ! openssl genpkey -algorithm Ed25519 -out identity.pem; then
+                error "生成 identity.pem 失败"
+                return 1
+            fi
+            echo "DEBUG: identity.pem 生成完成" >&2
+            # 备份新生成的密钥
+            backup_keypair "identity.pem"
+            success "身份密钥对生成并备份完成"
         fi
-        echo "DEBUG: identity.pem 生成完成" >&2
         
         echo "密钥对生成完成" >&2
         
@@ -1057,6 +1159,15 @@ setup_arx_node() {
         
         echo "✓ 新生成的节点地址: $node_pubkey" >&2
         echo "✓ 新生成的回调地址: $callback_pubkey" >&2
+    fi
+    
+    # 最终确保所有密钥都已备份
+    if [ "$node_key_valid" = true ] && [ "$callback_key_valid" = true ] && [ "$identity_key_valid" = true ]; then
+        log "确保所有有效密钥都已备份..."
+        backup_keypair "node-keypair.json"
+        backup_keypair "callback-kp.json"
+        backup_keypair "identity.pem"
+        success "所有密钥文件已备份到: $BACKUP_DIR"
     fi
     
     # 检查节点地址余额，决定是否需要领水
