@@ -1098,20 +1098,25 @@ setup_arx_node() {
     fi
     
     # 检查 BLS 密钥对（v0.5.1 必需）
+    # BLS 密钥对需要是 32 字节数组（只包含私钥部分）
+    # 注意：不能使用 solana address 验证，因为 BLS 密钥对不是标准 Solana 格式
     local bls_key_valid=false
     if [[ -f "bls-keypair.json" ]]; then
-        if solana address --keypair bls-keypair.json >/dev/null 2>&1; then
-            echo "DEBUG: bls-keypair.json 文件有效" >&2
+        # 验证 BLS 密钥对是否是 32 字节的 JSON 数组
+        local bls_length=$(python3 -c "import json; data=json.load(open('bls-keypair.json')); print(len(data))" 2>/dev/null)
+        if [ "$bls_length" = "32" ]; then
+            echo "DEBUG: bls-keypair.json 文件有效（32字节）" >&2
             bls_key_valid=true
             # 备份有效的密钥文件
             backup_keypair "bls-keypair.json"
         else
-            echo "DEBUG: bls-keypair.json 文件损坏" >&2
+            echo "DEBUG: bls-keypair.json 文件格式不正确（$bls_length 字节，应为 32 字节）" >&2
             # 尝试从备份恢复
             if restore_keypair "bls-keypair.json"; then
-                if solana address --keypair bls-keypair.json >/dev/null 2>&1; then
+                bls_length=$(python3 -c "import json; data=json.load(open('bls-keypair.json')); print(len(data))" 2>/dev/null)
+                if [ "$bls_length" = "32" ]; then
                     bls_key_valid=true
-                    success "✓ 从备份恢复的 bls-keypair.json 有效"
+                    success "✓ 从备份恢复的 bls-keypair.json 有效（32字节）"
                 fi
             fi
         fi
@@ -1119,9 +1124,10 @@ setup_arx_node() {
         echo "DEBUG: bls-keypair.json 文件不存在" >&2
         # 尝试从备份恢复
         if restore_keypair "bls-keypair.json"; then
-            if solana address --keypair bls-keypair.json >/dev/null 2>&1; then
+            local bls_length=$(python3 -c "import json; data=json.load(open('bls-keypair.json')); print(len(data))" 2>/dev/null)
+            if [ "$bls_length" = "32" ]; then
                 bls_key_valid=true
-                success "✓ 从备份恢复的 bls-keypair.json 有效"
+                success "✓ 从备份恢复的 bls-keypair.json 有效（32字节）"
             fi
         fi
     fi
@@ -1131,12 +1137,42 @@ setup_arx_node() {
         echo "DEBUG: 所有密钥文件有效，跳过生成" >&2
         log "检测到现有密钥文件（或从备份恢复），跳过生成..."
         
-        # 确保 BLS 密钥对存在（使用 node-keypair.json 的格式）
+        # 确保 BLS 密钥对存在（从 node-keypair.json 提取前 32 字节）
         if [[ ! -f "bls-keypair.json" ]] && [[ -f "node-keypair.json" ]]; then
-            log "创建 BLS 密钥对（使用 node-keypair.json）..."
-            cp node-keypair.json bls-keypair.json
-            backup_keypair "bls-keypair.json"
-            success "BLS 密钥对已创建并备份"
+            log "创建 BLS 密钥对（从 node-keypair.json 提取前 32 字节）..."
+            python3 << 'PYEOF' > bls-keypair.json
+import json
+with open('node-keypair.json', 'r') as f:
+    keypair = json.load(f)
+# 提取前 32 字节（私钥部分）
+bls_keypair = keypair[:32]
+with open('bls-keypair.json', 'w') as f:
+    json.dump(bls_keypair, f)
+PYEOF
+            if [ $? -eq 0 ] && [ -f "bls-keypair.json" ]; then
+                backup_keypair "bls-keypair.json"
+                success "BLS 密钥对已创建并备份（32字节格式）"
+            else
+                warning "BLS 密钥对创建失败，但继续执行..."
+            fi
+        elif [[ -f "bls-keypair.json" ]]; then
+            # 验证现有 BLS 密钥对格式
+            local bls_length=$(python3 -c "import json; data=json.load(open('bls-keypair.json')); print(len(data))" 2>/dev/null)
+            if [ "$bls_length" != "32" ]; then
+                warning "现有 BLS 密钥对格式不正确（$bls_length 字节，应为 32 字节），重新创建..."
+                if [[ -f "node-keypair.json" ]]; then
+                    python3 << 'PYEOF' > bls-keypair.json
+import json
+with open('node-keypair.json', 'r') as f:
+    keypair = json.load(f)
+bls_keypair = keypair[:32]
+with open('bls-keypair.json', 'w') as f:
+    json.dump(bls_keypair, f)
+PYEOF
+                    backup_keypair "bls-keypair.json"
+                    success "BLS 密钥对已修复为 32 字节格式"
+                fi
+            fi
         fi
         
         node_pubkey=$(solana-keygen pubkey node-keypair.json)
@@ -1431,18 +1467,83 @@ setup_arx_node() {
             info "📝 正在将节点账户信息上链，请稍候..."
 
             # v0.5.1 需要 BLS 密钥对参数
+            # BLS 密钥对需要是 32 字节数组（只包含私钥部分）
+            # Solana 密钥对是 64 字节数组（32字节私钥 + 32字节公钥）
             local bls_keypair_path="bls-keypair.json"
-            if [[ ! -f "$bls_keypair_path" ]]; then
-                warning "BLS 密钥对文件不存在，尝试创建..."
-                # 如果 node-keypair.json 存在，使用它创建 BLS 密钥对
+            
+            # 检查并创建/修复 BLS 密钥对
+            if [[ ! -f "$bls_keypair_path" ]] || ! python3 -c "import json; data=json.load(open('$bls_keypair_path')); assert isinstance(data, list) and len(data) == 32" 2>/dev/null; then
+                warning "BLS 密钥对文件不存在或格式不正确，尝试创建/修复..."
+                # 如果 node-keypair.json 存在，从中提取前 32 字节作为 BLS 密钥对
                 if [[ -f "node-keypair.json" ]]; then
-                    log "使用 node-keypair.json 创建 BLS 密钥对..."
-                    cp node-keypair.json "$bls_keypair_path"
-                    success "BLS 密钥对已创建: $bls_keypair_path"
+                    log "从 node-keypair.json 提取前 32 字节创建 BLS 密钥对..."
+                    # 使用 Python 提取前 32 字节
+                    python3 << 'PYEOF' > "$bls_keypair_path"
+import json
+import sys
+
+try:
+    with open('node-keypair.json', 'r') as f:
+        keypair = json.load(f)
+    
+    if isinstance(keypair, list) and len(keypair) >= 32:
+        # 提取前 32 字节（私钥部分）
+        bls_keypair = keypair[:32]
+        with open('bls-keypair.json', 'w') as f:
+            json.dump(bls_keypair, f)
+        print("BLS 密钥对已创建（32字节）", file=sys.stderr)
+        sys.exit(0)
+    else:
+        print("错误: node-keypair.json 格式不正确", file=sys.stderr)
+        sys.exit(1)
+except Exception as e:
+    print(f"错误: {e}", file=sys.stderr)
+    sys.exit(1)
+PYEOF
+                    
+                    if [ $? -eq 0 ] && [ -f "$bls_keypair_path" ]; then
+                        # 验证 BLS 密钥对格式
+                        local bls_length=$(python3 -c "import json; data=json.load(open('$bls_keypair_path')); print(len(data))" 2>/dev/null)
+                        if [ "$bls_length" = "32" ]; then
+                            success "BLS 密钥对已创建: $bls_keypair_path (32字节)"
+                            # 备份新创建的 BLS 密钥对
+                            backup_keypair "bls-keypair.json"
+                        else
+                            error "BLS 密钥对创建失败：长度不正确 ($bls_length 字节，应为 32 字节)"
+                            return 1
+                        fi
+                    else
+                        error "BLS 密钥对创建失败"
+                        return 1
+                    fi
                 else
                     error "BLS 密钥对文件不存在且无法创建: $bls_keypair_path"
                     error "请确保已生成所有必需的密钥文件"
                     return 1
+                fi
+            else
+                # 验证现有 BLS 密钥对格式
+                local bls_length=$(python3 -c "import json; data=json.load(open('$bls_keypair_path')); print(len(data))" 2>/dev/null)
+                if [ "$bls_length" != "32" ]; then
+                    warning "现有 BLS 密钥对格式不正确（$bls_length 字节，应为 32 字节），重新创建..."
+                    # 从 node-keypair.json 重新创建
+                    if [[ -f "node-keypair.json" ]]; then
+                        python3 << 'PYEOF' > "$bls_keypair_path"
+import json
+with open('node-keypair.json', 'r') as f:
+    keypair = json.load(f)
+bls_keypair = keypair[:32]
+with open('bls-keypair.json', 'w') as f:
+    json.dump(bls_keypair, f)
+PYEOF
+                        success "BLS 密钥对已修复为 32 字节格式"
+                        backup_keypair "bls-keypair.json"
+                    else
+                        error "无法修复 BLS 密钥对：node-keypair.json 不存在"
+                        return 1
+                    fi
+                else
+                    log "BLS 密钥对格式正确（32字节）"
                 fi
             fi
             
@@ -1454,7 +1555,7 @@ setup_arx_node() {
             
             # 使用绝对路径确保文件能被找到
             local abs_bls_path=$(realpath "$bls_keypair_path" 2>/dev/null || echo "$(pwd)/$bls_keypair_path")
-            log "使用 BLS 密钥对路径: $abs_bls_path"
+            log "使用 BLS 密钥对路径: $abs_bls_path (32字节格式)"
             
             # 显示完整的命令用于调试
             log "执行命令: arcium init-arx-accs --keypair-path node-keypair.json --callback-keypair-path callback-kp.json --peer-keypair-path identity.pem --bls-keypair-path \"$abs_bls_path\" --node-offset $node_offset --ip-address $public_ip --operator-location \"0\" --operator-url \"https://arcium.com\" --resource-claim \"100000\" --rpc-url \"$RPC_ENDPOINT\""
@@ -1664,6 +1765,26 @@ EOF
     
     # 创建 Docker Compose 配置
     log "创建 Docker Compose 配置..."
+    
+    # 确保 bls-keypair.json 存在
+    if [[ ! -f "bls-keypair.json" ]]; then
+        warning "bls-keypair.json 不存在，从 node-keypair.json 创建..."
+        if [[ -f "node-keypair.json" ]]; then
+            python3 << 'PYEOF' > bls-keypair.json
+import json
+with open('node-keypair.json', 'r') as f:
+    keypair = json.load(f)
+bls_keypair = keypair[:32]
+with open('bls-keypair.json', 'w') as f:
+    json.dump(bls_keypair, f)
+PYEOF
+            success "BLS 密钥对已创建"
+        else
+            error "无法创建 BLS 密钥对：node-keypair.json 不存在"
+            return 1
+        fi
+    fi
+    
     cat > docker-compose.yml << EOF
 version: '3.8'
 
@@ -1676,12 +1797,14 @@ services:
       - NODE_IDENTITY_FILE=/usr/arx-node/node-keys/node_identity.pem
       - NODE_KEYPAIR_FILE=/usr/arx-node/node-keys/node_keypair.json
       - CALLBACK_AUTHORITY_KEYPAIR_FILE=/usr/arx-node/node-keys/callback_authority_keypair.json
+      - BLS_PRIVATE_KEY_FILE=/usr/arx-node/node-keys/bls_keypair.json
       - NODE_CONFIG_PATH=/usr/arx-node/arx/node_config.toml
     volumes:
       - ./node-config.toml:/usr/arx-node/arx/node_config.toml
       - ./node-keypair.json:/usr/arx-node/node-keys/node_keypair.json:ro
       - ./callback-kp.json:/usr/arx-node/node-keys/callback_authority_keypair.json:ro
       - ./identity.pem:/usr/arx-node/node-keys/node_identity.pem:ro
+      - ./bls-keypair.json:/usr/arx-node/node-keys/bls_keypair.json:ro
       - ./arx-node-logs:/usr/arx-node/logs
     ports:
       - "$final_port:8080"
