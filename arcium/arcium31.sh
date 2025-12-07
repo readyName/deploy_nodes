@@ -1097,10 +1097,48 @@ setup_arx_node() {
         fi
     fi
     
+    # 检查 BLS 密钥对（v0.5.1 必需）
+    local bls_key_valid=false
+    if [[ -f "bls-keypair.json" ]]; then
+        if solana address --keypair bls-keypair.json >/dev/null 2>&1; then
+            echo "DEBUG: bls-keypair.json 文件有效" >&2
+            bls_key_valid=true
+            # 备份有效的密钥文件
+            backup_keypair "bls-keypair.json"
+        else
+            echo "DEBUG: bls-keypair.json 文件损坏" >&2
+            # 尝试从备份恢复
+            if restore_keypair "bls-keypair.json"; then
+                if solana address --keypair bls-keypair.json >/dev/null 2>&1; then
+                    bls_key_valid=true
+                    success "✓ 从备份恢复的 bls-keypair.json 有效"
+                fi
+            fi
+        fi
+    else
+        echo "DEBUG: bls-keypair.json 文件不存在" >&2
+        # 尝试从备份恢复
+        if restore_keypair "bls-keypair.json"; then
+            if solana address --keypair bls-keypair.json >/dev/null 2>&1; then
+                bls_key_valid=true
+                success "✓ 从备份恢复的 bls-keypair.json 有效"
+            fi
+        fi
+    fi
+    
     # 如果所有密钥都有效，跳过生成
-    if [ "$node_key_valid" = true ] && [ "$callback_key_valid" = true ] && [ "$identity_key_valid" = true ]; then
+    if [ "$node_key_valid" = true ] && [ "$callback_key_valid" = true ] && [ "$identity_key_valid" = true ] && [ "$bls_key_valid" = true ]; then
         echo "DEBUG: 所有密钥文件有效，跳过生成" >&2
         log "检测到现有密钥文件（或从备份恢复），跳过生成..."
+        
+        # 确保 BLS 密钥对存在（使用 node-keypair.json 的格式）
+        if [[ ! -f "bls-keypair.json" ]] && [[ -f "node-keypair.json" ]]; then
+            log "创建 BLS 密钥对（使用 node-keypair.json）..."
+            cp node-keypair.json bls-keypair.json
+            backup_keypair "bls-keypair.json"
+            success "BLS 密钥对已创建并备份"
+        fi
+        
         node_pubkey=$(solana-keygen pubkey node-keypair.json)
         callback_pubkey=$(solana-keygen pubkey callback-kp.json)
     else
@@ -1146,6 +1184,22 @@ setup_arx_node() {
             success "身份密钥对生成并备份完成"
         fi
         
+        # 生成 BLS 密钥对（v0.5.1 必需）
+        if [ "$bls_key_valid" = false ]; then
+            log "创建 BLS 密钥对（使用 node-keypair.json 格式）..."
+            echo "DEBUG: 使用 node-keypair.json 创建 BLS 密钥对" >&2
+            if [[ -f "node-keypair.json" ]]; then
+                cp node-keypair.json bls-keypair.json
+                echo "DEBUG: bls-keypair.json 创建完成" >&2
+                # 备份 BLS 密钥对
+                backup_keypair "bls-keypair.json"
+                success "BLS 密钥对创建并备份完成"
+            else
+                error "无法创建 BLS 密钥对：node-keypair.json 不存在"
+                return 1
+            fi
+        fi
+        
         echo "密钥对生成完成" >&2
         
         # 获取公钥
@@ -1167,6 +1221,15 @@ setup_arx_node() {
         backup_keypair "node-keypair.json"
         backup_keypair "callback-kp.json"
         backup_keypair "identity.pem"
+        # 确保 BLS 密钥对存在并备份
+        if [[ -f "bls-keypair.json" ]]; then
+            backup_keypair "bls-keypair.json"
+        elif [[ -f "node-keypair.json" ]]; then
+            # 如果 BLS 密钥对不存在，从 node-keypair.json 创建
+            cp node-keypair.json bls-keypair.json
+            backup_keypair "bls-keypair.json"
+            success "BLS 密钥对已创建并备份"
+        fi
         success "所有密钥文件已备份到: $BACKUP_DIR"
     fi
     
@@ -1367,17 +1430,56 @@ setup_arx_node() {
             log "执行 arcium init-arx-accs 命令 (尝试 $((retry_count+1))/$max_retries)..."
             info "📝 正在将节点账户信息上链，请稍候..."
 
-            # 使用 --skip-steps 参数跳过已存在的步骤
+            # v0.5.1 需要 BLS 密钥对参数
+            local bls_keypair_path="bls-keypair.json"
+            if [[ ! -f "$bls_keypair_path" ]]; then
+                warning "BLS 密钥对文件不存在，尝试创建..."
+                # 如果 node-keypair.json 存在，使用它创建 BLS 密钥对
+                if [[ -f "node-keypair.json" ]]; then
+                    log "使用 node-keypair.json 创建 BLS 密钥对..."
+                    cp node-keypair.json "$bls_keypair_path"
+                    success "BLS 密钥对已创建: $bls_keypair_path"
+                else
+                    error "BLS 密钥对文件不存在且无法创建: $bls_keypair_path"
+                    error "请确保已生成所有必需的密钥文件"
+                    return 1
+                fi
+            fi
+            
+            # 验证 BLS 密钥对文件是否可读
+            if [[ ! -r "$bls_keypair_path" ]]; then
+                error "BLS 密钥对文件不可读: $bls_keypair_path"
+                return 1
+            fi
+            
+            # 使用绝对路径确保文件能被找到
+            local abs_bls_path=$(realpath "$bls_keypair_path" 2>/dev/null || echo "$(pwd)/$bls_keypair_path")
+            log "使用 BLS 密钥对路径: $abs_bls_path"
+            
+            # 显示完整的命令用于调试
+            log "执行命令: arcium init-arx-accs --keypair-path node-keypair.json --callback-keypair-path callback-kp.json --peer-keypair-path identity.pem --bls-keypair-path \"$abs_bls_path\" --node-offset $node_offset --ip-address $public_ip --operator-location \"0\" --operator-url \"https://arcium.com\" --resource-claim \"100000\" --rpc-url \"$RPC_ENDPOINT\""
+            
             init_output=$(arcium init-arx-accs \
                 --keypair-path node-keypair.json \
                 --callback-keypair-path callback-kp.json \
                 --peer-keypair-path identity.pem \
+                --bls-keypair-path "$abs_bls_path" \
                 --node-offset $node_offset \
                 --ip-address $public_ip \
+                --operator-location "0" \
+                --operator-url "https://arcium.com" \
+                --resource-claim "100000" \
                 --rpc-url "$RPC_ENDPOINT" 2>&1)
             init_rc=$?
             
-            echo "$init_output"
+            # 显示完整的输出（包括错误信息）
+            if [ $init_rc -ne 0 ]; then
+                error "命令执行失败，退出码: $init_rc"
+                error "错误输出:"
+                echo "$init_output" >&2
+            else
+                echo "$init_output"
+            fi
 
             if [ $init_rc -eq 0 ]; then
                 success "节点账户初始化成功"
