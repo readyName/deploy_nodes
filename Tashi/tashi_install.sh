@@ -499,18 +499,28 @@ install() {
 	log "INFO" "Starting worker in interactive setup mode.\n"
 
 	local setup_cmd=$(make_setup_cmd)
+	local output_file=$(mktemp)
 
-	sh -c "set -ex; $setup_cmd"
-
+	# 使用 script 命令记录所有输出，同时保持交互式
+	# 注意：script 命令会记录所有终端输出，包括用户输入的回显
+	script -q -c "sh -c \"set -ex; $setup_cmd\"" "$output_file"
 	local exit_code=$?
+
+	# 从输出文件中提取节点 ID
+	local node_id=""
+	if [[ -f "$output_file" ]]; then
+		node_id=$(grep -o "node=[A-Za-z0-9]*" "$output_file" 2>/dev/null | head -1 | cut -d'=' -f2)
+	fi
 
 	echo ""
 
 	if [[ $exit_code -eq 130 ]]; then
 		log "INFO" "Worker setup cancelled. You may re-run this script at any time."
+		rm -f "$output_file"
 		exit 0
 	elif [[ $exit_code -ne 0 ]]; then
 		log "ERROR" "Setup failed ($exit_code): ${CROSSMARK} Please see the following page for troubleshooting instructions: ${TROUBLESHOOT_LINK}."
+		rm -f "$output_file"
 		exit 1
 	fi
 
@@ -525,6 +535,22 @@ install() {
 	if [[ $exit_code -ne 0 ]]; then
 		log "ERROR" "Worker failed to start ($exit_code): ${CROSSMARK} Please see the following page for troubleshooting instructions: ${TROUBLESHOOT_LINK}."
 	fi
+
+	# 显示节点 ID
+	if [[ -n "$node_id" ]]; then
+		echo ""
+		log "INFO" "═══════════════════════════════════════════════════════════════"
+		log "INFO" "🔑 节点 ID（Node ID）"
+		log "INFO" "═══════════════════════════════════════════════════════════════"
+		log "INFO" ""
+		log "INFO" "您的节点 ID: ${node_id}"
+		log "INFO" ""
+		log "INFO" "═══════════════════════════════════════════════════════════════"
+		echo ""
+	fi
+
+	# 清理临时文件
+	rm -f "$output_file"
 }
 
 update() {
