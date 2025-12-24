@@ -495,23 +495,45 @@ make_run_cmd() {
 install() {
 	log "INFO" "Installing worker. The commands being run will be printed for transparency.\n"
 
-	log "INFO" "Starting worker in interactive setup mode.\n"
+	# 尝试运行 setup（如果支持）
+	log "INFO" "Attempting worker setup (if supported)...\n"
 
 	local setup_cmd=$(make_setup_cmd)
+	local setup_success=false
 
-	sh -c "set -ex; $setup_cmd"
-
+	# 尝试运行 setup
+	set +e  # 暂时禁用错误退出
+	sh -c "set -ex; $setup_cmd" >/tmp/tashi_setup.log 2>&1
 	local exit_code=$?
+	set -e  # 重新启用错误退出
 
 	echo ""
-
+	
 	if [[ $exit_code -eq 130 ]]; then
 		log "INFO" "Worker setup cancelled. You may re-run this script at any time."
 		exit 0
-	elif [[ $exit_code -ne 0 ]]; then
-		log "ERROR" "Setup failed ($exit_code): ${CROSSMARK} Please see the following page for troubleshooting instructions: ${TROUBLESHOOT_LINK}."
-		exit 1
+	elif [[ $exit_code -eq 0 ]]; then
+		setup_success=true
+		log "INFO" "Setup completed successfully."
+	else
+		# 检查是否是 "unknown command" 错误
+		if grep -q "unknown command" /tmp/tashi_setup.log 2>/dev/null; then
+			log "WARNING" "Setup command not supported by this image version."
+			log "INFO" "Skipping setup and proceeding directly to run worker..."
+		else
+			log "WARNING" "Setup failed ($exit_code), but continuing to run worker..."
+			log "INFO" "Setup output:"
+			cat /tmp/tashi_setup.log 2>/dev/null || true
+		fi
 	fi
+
+	# 清理 setup 容器（如果存在）
+	${CONTAINER_RT} rm -f "$CONTAINER_NAME-setup" 2>/dev/null || true
+
+	echo ""
+
+	# 运行 worker
+	log "INFO" "Starting worker...\n"
 
 	local run_cmd=$(make_run_cmd)
 
@@ -523,6 +545,7 @@ install() {
 
 	if [[ $exit_code -ne 0 ]]; then
 		log "ERROR" "Worker failed to start ($exit_code): ${CROSSMARK} Please see the following page for troubleshooting instructions: ${TROUBLESHOOT_LINK}."
+		exit 1
 	fi
 }
 
