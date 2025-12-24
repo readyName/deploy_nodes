@@ -392,9 +392,13 @@ prompt_auto_updates() {
 		and apply the update manually.\n
 	EOF
 
-	# 默认启用自动更新（自动选择 Y）
-	log "INFO" "Automatic updates enabled (default: yes)."
-	AUTO_UPDATE=y
+	prompt "Enable automatic updates? (Y/n): " AUTO_UPDATE
+
+	if [[ "$AUTO_UPDATE" == "n" || "$AUTO_UPDATE" == "N" ]]; then
+		AUTO_UPDATE=""
+	else
+		AUTO_UPDATE="y"
+	fi
 
 	# Blank line
 	echo ""
@@ -429,14 +433,22 @@ check_warnings() {
 			return
 	fi
 
-	# 默认继续（自动选择 y）
-	log "INFO" "Continuing with warnings (default: yes)."
-	# 不再需要用户确认，直接继续
+	prompt "Continue with installation? (Y/n): " YES
+
+	if [[ "$YES" == "n" || "$YES" == "N" ]]; then
+		log "INFO" "Installation cancelled."
+		exit 0
+	fi
 }
 
 prompt_continue() {
-	# 默认继续（自动选择 Y）
-	log "INFO" "Ready to $SUBCOMMAND worker node. Proceeding (default: yes)."
+	prompt "Ready to $SUBCOMMAND worker node. Proceed? (Y/n): " YES
+
+	if [[ "$YES" == "n" || "$YES" == "N" ]]; then
+		log "INFO" "Installation cancelled."
+		exit 0
+	fi
+
 	echo ""
 }
 
@@ -653,7 +665,7 @@ horizontal_line
 
 # Integrated NAT check. This is separate from system requirements because most manually started worker nodes
 # are expected to be behind some sort of NAT, so this is mostly informational.
-# check_nat  # 已跳过 NAT 检测（信息性检查，不影响安装）
+check_nat
 
 horizontal_line
 
