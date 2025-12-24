@@ -451,9 +451,15 @@ PULL_FLAG=$([[ "$IMAGE_TAG" == ghcr* ]] && echo "--pull=always")
 make_setup_cmd() {
 		local sudo="${1-$SUDO_CMD}"
 
+		# 确保在 setup 前获取公网 IP
+		if [[ -z "$PUBLIC_IP" ]]; then
+			get_public_ip
+		fi
+
 		cat <<-EOF
 			${sudo:+"$sudo "}${CONTAINER_RT} run --rm -it \\
 				--mount type=volume,src=$AUTH_VOLUME,dst=$AUTH_DIR \\
+				${PUBLIC_IP:+-e PUBLIC_IP="$PUBLIC_IP"} \\
 				$PULL_FLAG $PLATFORM_ARG $IMAGE_TAG \\
 				interactive-setup $AUTH_DIR
 		EOF
