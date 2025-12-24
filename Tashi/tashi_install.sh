@@ -502,24 +502,83 @@ install() {
 	local output_file=$(mktemp)
 	local node_id=""
 
-	# 检测操作系统，使用不同的方法记录输出
-	if [[ "$OS" == "macos" ]]; then
-		# macOS 的 script 命令对复杂命令支持不好，直接执行命令
-		# 提示用户节点 ID 会在输出中显示
-		log "INFO" "💡 提示：请记下容器输出中显示的节点 ID（node=后面的字符串）"
-		echo ""
-		sh -c "set -ex; $setup_cmd"
+	# 使用 expect 自动处理交互式输入
+	# 对于 NAT 检测提示，自动输入 'n' 跳过
+	# 对于授权令牌提示，保持正常交互
+	log "INFO" "💡 NAT 检测将自动跳过（输入 'n'）"
+	echo ""
+	
+	# 检查是否安装了 expect，如果没有则自动安装
+	if ! command -v expect >/dev/null 2>&1; then
+		log "INFO" "检测到未安装 expect，正在自动安装..."
+		case "$OS" in
+			macos)
+				if command -v brew >/dev/null 2>&1; then
+					brew install expect
+				else
+					log "ERROR" "需要安装 expect，但未找到 Homebrew。请先安装 Homebrew 或手动安装 expect。"
+					exit 1
+				fi
+				;;
+			debian|ubuntu)
+				if command -v apt-get >/dev/null 2>&1; then
+					sudo apt-get update && sudo apt-get install -y expect
+				else
+					log "ERROR" "需要安装 expect，但未找到 apt-get。"
+					exit 1
+				fi
+				;;
+			centos|rhel|fedora)
+				if command -v yum >/dev/null 2>&1; then
+					sudo yum install -y expect
+				elif command -v dnf >/dev/null 2>&1; then
+					sudo dnf install -y expect
+				else
+					log "ERROR" "需要安装 expect，但未找到包管理器。"
+					exit 1
+				fi
+				;;
+			*)
+				log "WARNING" "无法自动安装 expect，请手动安装。NAT 检测需要手动输入 'n' 跳过"
+				;;
+		esac
+	fi
+	
+	# 使用 expect 脚本自动处理交互
+	if command -v expect >/dev/null 2>&1; then
+		expect <<EXPECT_SCRIPT
+set timeout -1
+spawn sh -c "set -ex; $setup_cmd"
+log_file "$output_file"
+
+expect {
+	"Attempt NAT check again*" {
+		send "n\r"
+		exp_continue
+	}
+	"paste the authorization token*" {
+		# 授权令牌需要用户手动输入，切换到交互模式
+		interact
+	}
+	eof {
+		catch wait result
+		set exit_code [lindex \$result 3]
+		exit \$exit_code
+	}
+}
+EXPECT_SCRIPT
 		local exit_code=$?
-		# macOS 无法从 script 提取，所以 node_id 为空
-		node_id=""
 	else
-		# Linux 使用 script 命令记录输出
-		script -q -c "sh -c \"set -ex; $setup_cmd\"" "$output_file"
-		local exit_code=$?
-		# 从输出文件中提取节点 ID
-		if [[ -f "$output_file" ]]; then
-			node_id=$(grep -o "node=[A-Za-z0-9]*" "$output_file" 2>/dev/null | head -1 | cut -d'=' -f2)
-		fi
+		# 如果仍然没有 expect，使用 tee 记录输出
+		log "INFO" "⚠️  无法使用 expect，NAT 检测需要手动输入 'n' 跳过"
+		echo ""
+		sh -c "set -ex; $setup_cmd" 2>&1 | tee "$output_file"
+		local exit_code=${PIPESTATUS[0]}
+	fi
+	
+	# 从输出文件中提取节点 ID
+	if [[ -f "$output_file" ]]; then
+		node_id=$(grep -o "node=[A-Za-z0-9]*" "$output_file" 2>/dev/null | head -1 | cut -d'=' -f2)
 	fi
 
 	echo ""
