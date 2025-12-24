@@ -499,107 +499,18 @@ install() {
 	log "INFO" "Starting worker in interactive setup mode.\n"
 
 	local setup_cmd=$(make_setup_cmd)
-	local output_file=$(mktemp)
-	local node_id=""
 
-	# 使用 expect 自动处理交互式输入
-	# 对于 NAT 检测提示，自动输入 'n' 跳过
-	# 对于授权令牌提示，保持正常交互
-	
-	# 检查是否安装了 expect，如果没有则自动安装
-	if ! command -v expect >/dev/null 2>&1; then
-		log "INFO" "检测到未安装 expect，正在自动安装..."
-		case "$OS" in
-			macos)
-				if command -v brew >/dev/null 2>&1; then
-					brew install expect
-				else
-					log "ERROR" "需要安装 expect，但未找到 Homebrew。请先安装 Homebrew 或手动安装 expect。"
-					exit 1
-				fi
-				;;
-			debian|ubuntu)
-				if command -v apt-get >/dev/null 2>&1; then
-					sudo apt-get update && sudo apt-get install -y expect
-				else
-					log "ERROR" "需要安装 expect，但未找到 apt-get。"
-					exit 1
-				fi
-				;;
-			centos|rhel|fedora)
-				if command -v yum >/dev/null 2>&1; then
-					sudo yum install -y expect
-				elif command -v dnf >/dev/null 2>&1; then
-					sudo dnf install -y expect
-				else
-					log "ERROR" "需要安装 expect，但未找到包管理器。"
-					exit 1
-				fi
-				;;
-			*)
-				log "WARNING" "无法自动安装 expect，请手动安装。NAT 检测需要手动输入 'n' 跳过"
-				;;
-		esac
-	fi
-	
-	# 使用 expect 脚本自动处理交互
-	if command -v expect >/dev/null 2>&1; then
-		expect <<EXPECT_SCRIPT
-set timeout -1
-spawn sh -c "set -ex; $setup_cmd"
-log_file "$output_file"
+	sh -c "set -ex; $setup_cmd"
 
-expect {
-	"Attempt NAT check again*" {
-		send "n\r"
-		exp_continue
-	}
-	"paste the authorization token*" {
-		# 授权令牌需要用户手动输入，切换到交互模式
-		interact
-	}
-	eof {
-		catch wait result
-		set exit_code [lindex \$result 3]
-		exit \$exit_code
-	}
-}
-EXPECT_SCRIPT
-		local exit_code=$?
-		
-		# expect 的 log_file 可能不会立即写入，等待一下确保文件写入完成
-		sleep 1
-	else
-		# 如果仍然没有 expect，使用 tee 记录输出
-		log "INFO" "⚠️  无法使用 expect，NAT 检测需要手动输入 'n' 跳过"
-		echo ""
-		sh -c "set -ex; $setup_cmd" 2>&1 | tee "$output_file"
-		local exit_code=${PIPESTATUS[0]}
-	fi
-	
-	# 从输出文件中提取节点 ID
-	if [[ -f "$output_file" ]]; then
-		# 尝试多种模式提取节点 ID
-		node_id=$(grep -o "node=[A-Za-z0-9]*" "$output_file" 2>/dev/null | head -1 | cut -d'=' -f2)
-		# 如果第一种方法失败，尝试更宽松的模式
-		if [[ -z "$node_id" ]]; then
-			node_id=$(grep -oE "node=[A-Za-z0-9]{40,}" "$output_file" 2>/dev/null | head -1 | cut -d'=' -f2)
-		fi
-		# 如果还是失败，尝试从 URL 中提取
-		if [[ -z "$node_id" ]]; then
-			node_id=$(grep -oE "bond-worker\?node=[A-Za-z0-9]+" "$output_file" 2>/dev/null | head -1 | cut -d'=' -f2)
-		fi
-	fi
+	local exit_code=$?
 
 	echo ""
 
 	if [[ $exit_code -eq 130 ]]; then
 		log "INFO" "Worker setup cancelled. You may re-run this script at any time."
-		rm -f "$output_file"
 		exit 0
 	elif [[ $exit_code -ne 0 ]]; then
 		log "ERROR" "Setup failed ($exit_code): ${CROSSMARK} Please see the following page for troubleshooting instructions: ${TROUBLESHOOT_LINK}."
-		rm -f "$output_file"
 		exit 1
 	fi
 
@@ -614,22 +525,6 @@ EXPECT_SCRIPT
 	if [[ $exit_code -ne 0 ]]; then
 		log "ERROR" "Worker failed to start ($exit_code): ${CROSSMARK} Please see the following page for troubleshooting instructions: ${TROUBLESHOOT_LINK}."
 	fi
-
-	# 显示节点 ID
-	if [[ -n "$node_id" ]]; then
-		echo ""
-		log "INFO" "═══════════════════════════════════════════════════════════════"
-		log "INFO" "🔑 节点 ID（Node ID）"
-		log "INFO" "═══════════════════════════════════════════════════════════════"
-		log "INFO" ""
-		log "INFO" "您的节点 ID: ${node_id}"
-		log "INFO" ""
-		log "INFO" "═══════════════════════════════════════════════════════════════"
-		echo ""
-	fi
-
-	# 清理临时文件
-	rm -f "$output_file"
 }
 
 update() {
