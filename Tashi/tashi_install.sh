@@ -500,14 +500,20 @@ install() {
 
 	local setup_cmd=$(make_setup_cmd)
 	local output_file=$(mktemp)
+	local node_id=""
 
-	# 使用 script 命令记录所有输出，同时保持交互式
-	# 注意：script 命令会记录所有终端输出，包括用户输入的回显
-	script -q -c "sh -c \"set -ex; $setup_cmd\"" "$output_file"
-	local exit_code=$?
+	# 检测操作系统，使用不同的方法记录输出
+	if [[ "$OS" == "macos" ]]; then
+		# macOS 的 script 命令语法：script [-q] file command
+		script -q "$output_file" sh -c "set -ex; $setup_cmd"
+		local exit_code=$?
+	else
+		# Linux 使用 script 命令记录输出
+		script -q -c "sh -c \"set -ex; $setup_cmd\"" "$output_file"
+		local exit_code=$?
+	fi
 
 	# 从输出文件中提取节点 ID
-	local node_id=""
 	if [[ -f "$output_file" ]]; then
 		node_id=$(grep -o "node=[A-Za-z0-9]*" "$output_file" 2>/dev/null | head -1 | cut -d'=' -f2)
 	fi
