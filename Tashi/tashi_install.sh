@@ -392,24 +392,12 @@ prompt_auto_updates() {
 		and apply the update manually.\n
 	EOF
 
-	local choice=n
-
-	if [[ (-t 2)]]; then # If stderr is not connected to a TTY, we can't prompt.
-		prompt "Enable automatic updates? (Y/n) " choice
-	fi
+	# 默认启用自动更新（自动选择 Y）
+	log "INFO" "Automatic updates enabled (default: yes)."
+	AUTO_UPDATE=y
 
 	# Blank line
 	echo ""
-
-	case "$choice" in
-		n | N)
-			log "INFO" "Automatic updates $(make_bold 'disabled'). For manual upgrade instructions, see:\n$MANUAL_UPDATE_LINK"
-			;;
-		*)
-			log "INFO" "Automatic updates enabled."
-			AUTO_UPDATE=y
-			;;
-	esac
 }
 
 prompt() {
@@ -441,30 +429,14 @@ check_warnings() {
 			return
 	fi
 
-	if [[ ! (-t 2) && ! $YES ]]; then # If stderr is not connected to a TTY, we can't prompt.
-		log "ERROR" "Cannot prompt to continue. Re-run this with '--ignore-warnings' to continue installation."
-		exit 1
-	fi
-
-	prompt "Do you want to continue anyway? (y/N) " choice
-
-	if [[ "$choice" != [yY] ]]; then
-		exit 0
-	fi
+	# 默认继续（自动选择 y）
+	log "INFO" "Continuing with warnings (default: yes)."
+	# 不再需要用户确认，直接继续
 }
 
 prompt_continue() {
-	if [[ ! (-t 2) && ! $YES ]]; then # If stderr is not connected to a TTY, we can't prompt.
-		log "ERROR" "Cannot prompt to continue. Re-run this with '--yes' to continue installation."
-		exit 1
-	fi
-
-	prompt "Ready to $SUBCOMMAND worker node. Do you want to continue? (Y/n) " choice
-
-	if [[ "$choice" == [nN] ]]; then
-		exit 0
-	fi
-
+	# 默认继续（自动选择 Y）
+	log "INFO" "Ready to $SUBCOMMAND worker node. Proceeding (default: yes)."
 	echo ""
 }
 
