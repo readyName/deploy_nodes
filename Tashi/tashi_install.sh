@@ -79,7 +79,6 @@ while [[ $# -gt 0 ]]; do
 			IGNORE_WARNINGS=""
 			shift
 			;;
-	case $1 in
 		--ignore-warnings)
 			IGNORE_WARNINGS=y
 			shift
