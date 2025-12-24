@@ -536,6 +536,18 @@ install() {
 
 	if [[ $exit_code -ne 0 ]]; then
 		log "ERROR" "Worker failed to start ($exit_code): ${CROSSMARK} Please see the following page for troubleshooting instructions: ${TROUBLESHOOT_LINK}."
+		
+		# 检查是否是授权文件缺失的问题
+		local logs_output=$(docker logs "$CONTAINER_NAME" 2>&1 | tail -5)
+		if echo "$logs_output" | grep -q "node_auth.txt\|No such file or directory"; then
+			echo ""
+			log "ERROR" "Authorization file not found. This usually means:"
+			log "ERROR" "  1. The interactive setup was not completed"
+			log "ERROR" "  2. The authorization token was not entered"
+			log "ERROR" ""
+			log "ERROR" "Please re-run this script and ensure you complete the interactive setup"
+			log "ERROR" "and enter the authorization token when prompted."
+		fi
 	fi
 }
 
