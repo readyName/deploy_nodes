@@ -504,18 +504,22 @@ install() {
 
 	# 检测操作系统，使用不同的方法记录输出
 	if [[ "$OS" == "macos" ]]; then
-		# macOS 的 script 命令语法：script [-q] file command
-		script -q "$output_file" sh -c "set -ex; $setup_cmd"
+		# macOS 的 script 命令对复杂命令支持不好，直接执行命令
+		# 提示用户节点 ID 会在输出中显示
+		log "INFO" "💡 提示：请记下容器输出中显示的节点 ID（node=后面的字符串）"
+		echo ""
+		sh -c "set -ex; $setup_cmd"
 		local exit_code=$?
+		# macOS 无法从 script 提取，所以 node_id 为空
+		node_id=""
 	else
 		# Linux 使用 script 命令记录输出
 		script -q -c "sh -c \"set -ex; $setup_cmd\"" "$output_file"
 		local exit_code=$?
-	fi
-
-	# 从输出文件中提取节点 ID
-	if [[ -f "$output_file" ]]; then
-		node_id=$(grep -o "node=[A-Za-z0-9]*" "$output_file" 2>/dev/null | head -1 | cut -d'=' -f2)
+		# 从输出文件中提取节点 ID
+		if [[ -f "$output_file" ]]; then
+			node_id=$(grep -o "node=[A-Za-z0-9]*" "$output_file" 2>/dev/null | head -1 | cut -d'=' -f2)
+		fi
 	fi
 
 	echo ""
