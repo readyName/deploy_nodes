@@ -505,8 +505,6 @@ install() {
 	# 使用 expect 自动处理交互式输入
 	# 对于 NAT 检测提示，自动输入 'n' 跳过
 	# 对于授权令牌提示，保持正常交互
-	log "INFO" "💡 NAT 检测将自动跳过（输入 'n'）"
-	echo ""
 	
 	# 检查是否安装了 expect，如果没有则自动安装
 	if ! command -v expect >/dev/null 2>&1; then
@@ -568,6 +566,9 @@ expect {
 }
 EXPECT_SCRIPT
 		local exit_code=$?
+		
+		# expect 的 log_file 可能不会立即写入，等待一下确保文件写入完成
+		sleep 1
 	else
 		# 如果仍然没有 expect，使用 tee 记录输出
 		log "INFO" "⚠️  无法使用 expect，NAT 检测需要手动输入 'n' 跳过"
@@ -578,7 +579,16 @@ EXPECT_SCRIPT
 	
 	# 从输出文件中提取节点 ID
 	if [[ -f "$output_file" ]]; then
+		# 尝试多种模式提取节点 ID
 		node_id=$(grep -o "node=[A-Za-z0-9]*" "$output_file" 2>/dev/null | head -1 | cut -d'=' -f2)
+		# 如果第一种方法失败，尝试更宽松的模式
+		if [[ -z "$node_id" ]]; then
+			node_id=$(grep -oE "node=[A-Za-z0-9]{40,}" "$output_file" 2>/dev/null | head -1 | cut -d'=' -f2)
+		fi
+		# 如果还是失败，尝试从 URL 中提取
+		if [[ -z "$node_id" ]]; then
+			node_id=$(grep -oE "bond-worker\?node=[A-Za-z0-9]+" "$output_file" 2>/dev/null | head -1 | cut -d'=' -f2)
+		fi
 	fi
 
 	echo ""
