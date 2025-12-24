@@ -421,25 +421,19 @@ make_setup_cmd() {
 
 # Make run command
 make_run_cmd() {
-	local cmd="${1:-${SUDO_CMD:+"$SUDO_CMD "}${CONTAINER_RT}}"
-	local action="${2:-run}"
-	local name="${3:-$CONTAINER_NAME}"
-	local old_name="${4:-}"
+	local sudo="${1-$SUDO_CMD}"
+	local cmd="${2-"run -d"}"
+	local name="${3-$CONTAINER_NAME}"
+	local volumes_from="${4+"--volumes-from=$4"}"
+
 	local auth_dir="/var/lib/tashi-depin-worker"
 	local auth_volume="tashi-depin-worker-auth"
-	local auto_update_arg=""
-	local volumes_from=""
-	local pull_flag=""
-	
-	if [[ "${AUTO_UPDATE:-}" == "y" ]]; then
+	local auto_update_arg=''
+	local restart_arg=''
+	local pull_flag=''
+
+	if [[ $AUTO_UPDATE == "y" ]]; then
 		auto_update_arg="--auto-update"
-	fi
-	
-	if [[ "$action" == "create" ]]; then
-		pull_flag="--pull=always"
-		if [[ -n "$old_name" ]]; then
-			volumes_from="--volumes-from $old_name"
-		fi
 	fi
 
 	if [[ "$CONTAINER_RT" == "docker" ]]; then
@@ -497,7 +491,7 @@ update() {
 	local container_old="$CONTAINER_NAME"
 	local container_new="$CONTAINER_NAME-new"
 
-	local create_cmd=$(make_run_cmd "" "create" "$container_new" "$container_old")
+	local create_cmd=$(make_run_cmd "" "create -d" "$container_new" "$container_old")
 
 	# Execute this whole next block as `sudo` if necessary.
 	# Piping means the sub-process reads line by line and can tell us right where it failed.
