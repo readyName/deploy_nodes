@@ -498,25 +498,6 @@ install() {
 
 	log "INFO" "Starting worker in interactive setup mode.\n"
 
-	# 显示中文提示信息
-	echo ""
-	log "INFO" "═══════════════════════════════════════════════════════════════"
-	log "INFO" "📋 节点授权说明"
-	log "INFO" "═══════════════════════════════════════════════════════════════"
-	log "INFO" ""
-	log "INFO" "DePIN Worker 必须由已质押 \$TASHI 的操作者地址授权。"
-	log "INFO" ""
-	log "INFO" "请按照以下步骤完成授权："
-	log "INFO" "1. 在浏览器中打开授权页面（稍后会显示完整 URL）"
-	log "INFO" "2. 完成授权操作"
-	log "INFO" "3. 复制授权令牌（authorization token）"
-	log "INFO" "4. 粘贴到终端并按 Enter 键"
-	log "INFO" ""
-	log "INFO" "⚠️  注意：授权页面 URL 中包含节点 ID（node=...），请确保使用正确的节点 ID"
-	log "INFO" ""
-	log "INFO" "═══════════════════════════════════════════════════════════════"
-	echo ""
-
 	local setup_cmd=$(make_setup_cmd)
 
 	sh -c "set -ex; $setup_cmd"
