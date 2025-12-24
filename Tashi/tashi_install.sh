@@ -60,12 +60,6 @@ horizontal_line() {
 	printf '\n%*s\n\n' "$WIDTH" '' | tr ' ' "$FILL_CHAR"
 }
 
-# 默认启用非交互式安装（自动跳过非必需交互）
-# 可以通过 --interactive 参数启用交互式模式
-YES=${YES:-1}
-AUTO_UPDATE=${AUTO_UPDATE:-y}
-IGNORE_WARNINGS=${IGNORE_WARNINGS:-y}
-
 # munch args
 POSITIONAL_ARGS=()
 
@@ -73,35 +67,14 @@ SUBCOMMAND=install
 
 while [[ $# -gt 0 ]]; do
 	case $1 in
-		--interactive)
-			YES=0
-			AUTO_UPDATE=""
-			IGNORE_WARNINGS=""
-			shift
-			;;
 		--ignore-warnings)
 			IGNORE_WARNINGS=y
-			shift
-			;;
-		--no-ignore-warnings)
-			IGNORE_WARNINGS=""
-			shift
 			;;
 		-y | --yes)
 			YES=1
-			shift
-			;;
-		--no-yes)
-			YES=0
-			shift
 			;;
 		--auto-update)
 			AUTO_UPDATE=y
-			shift
-			;;
-		--no-auto-update)
-			AUTO_UPDATE=""
-			shift
 			;;
 		--image-tag=*)
 			IMAGE_TAG="${1#"--image-tag="}"
@@ -374,13 +347,9 @@ check_nat() {
 
 # Check Warnings
 check_warnings() {
-	if [[ $WARNINGS -gt 0 ]]; then
-		if [[ "${IGNORE_WARNINGS:-}" == "y" ]]; then
-			log "INFO" "Found $WARNINGS warning(s), but continuing due to --ignore-warnings (default in non-interactive mode)."
-		elif [[ "${YES:-}" == "1" ]]; then
-			log "INFO" "Found $WARNINGS warning(s), but continuing due to non-interactive mode (-y/--yes)."
-		else
-			log "WARNING" "Found $WARNINGS warning(s). Use --ignore-warnings to continue anyway."
+	if [[ $WARNINGS -gt 0 && "${IGNORE_WARNINGS:-}" != "y" ]]; then
+		log "WARNING" "Found $WARNINGS warning(s). Use --ignore-warnings to continue anyway."
+		if [[ "${YES:-}" != "1" ]]; then
 			echo -n "Continue anyway? (y/N) "
 			read -r choice </dev/tty
 			if [[ "$choice" != [yY] ]]; then
@@ -398,13 +367,10 @@ check_warnings() {
 # Prompt for auto-updates
 prompt_auto_updates() {
 	if [[ "${AUTO_UPDATE:-}" == "y" ]]; then
-		log "INFO" "Auto-updates: Enabled (default in non-interactive mode)"
 		return
 	fi
 
 	if [[ "${YES:-}" == "1" ]]; then
-		log "INFO" "Auto-updates: Enabled (non-interactive mode)"
-		AUTO_UPDATE=y
 		return
 	fi
 
@@ -420,7 +386,6 @@ prompt_auto_updates() {
 # Prompt to continue
 prompt_continue() {
 	if [[ "${YES:-}" == "1" ]]; then
-		log "INFO" "All checks passed. Proceeding with installation (non-interactive mode)..."
 		return
 	fi
 
@@ -495,45 +460,23 @@ make_run_cmd() {
 install() {
 	log "INFO" "Installing worker. The commands being run will be printed for transparency.\n"
 
-	# 尝试运行 setup（如果支持）
-	log "INFO" "Attempting worker setup (if supported)...\n"
+	log "INFO" "Starting worker in interactive setup mode.\n"
 
 	local setup_cmd=$(make_setup_cmd)
-	local setup_success=false
 
-	# 尝试运行 setup
-	set +e  # 暂时禁用错误退出
-	sh -c "set -ex; $setup_cmd" >/tmp/tashi_setup.log 2>&1
+	sh -c "set -ex; $setup_cmd"
+
 	local exit_code=$?
-	set -e  # 重新启用错误退出
 
 	echo ""
-	
+
 	if [[ $exit_code -eq 130 ]]; then
 		log "INFO" "Worker setup cancelled. You may re-run this script at any time."
 		exit 0
-	elif [[ $exit_code -eq 0 ]]; then
-		setup_success=true
-		log "INFO" "Setup completed successfully."
-	else
-		# 检查是否是 "unknown command" 错误
-		if grep -q "unknown command" /tmp/tashi_setup.log 2>/dev/null; then
-			log "WARNING" "Setup command not supported by this image version."
-			log "INFO" "Skipping setup and proceeding directly to run worker..."
-		else
-			log "WARNING" "Setup failed ($exit_code), but continuing to run worker..."
-			log "INFO" "Setup output:"
-			cat /tmp/tashi_setup.log 2>/dev/null || true
-		fi
+	elif [[ $exit_code -ne 0 ]]; then
+		log "ERROR" "Setup failed ($exit_code): ${CROSSMARK} Please see the following page for troubleshooting instructions: ${TROUBLESHOOT_LINK}."
+		exit 1
 	fi
-
-	# 清理 setup 容器（如果存在）
-	${CONTAINER_RT} rm -f "$CONTAINER_NAME-setup" 2>/dev/null || true
-
-	echo ""
-
-	# 运行 worker
-	log "INFO" "Starting worker...\n"
 
 	local run_cmd=$(make_run_cmd)
 
@@ -545,7 +488,6 @@ install() {
 
 	if [[ $exit_code -ne 0 ]]; then
 		log "ERROR" "Worker failed to start ($exit_code): ${CROSSMARK} Please see the following page for troubleshooting instructions: ${TROUBLESHOOT_LINK}."
-		exit 1
 	fi
 }
 
@@ -654,13 +596,6 @@ detect_os
 
 # Run all checks
 display_logo
-
-# 显示运行模式
-if [[ "${YES:-}" == "1" ]]; then
-	log "INFO" "Running in non-interactive mode (default). Use --interactive to enable interactive prompts."
-else
-	log "INFO" "Running in interactive mode. Use -y/--yes for non-interactive mode."
-fi
 
 log "INFO" "Starting system checks..."
 
