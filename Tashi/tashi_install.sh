@@ -252,188 +252,252 @@ check_disk() {
 	fi
 }
 
-# Container Runtime Check
+# Docker or Podman Check
 check_container_runtime() {
-	if check_command docker; then
-		CONTAINER_RT="docker"
-		CONTAINER_NAME="tashi-depin-worker"
-		log "INFO" "Container Runtime Check: ${CHECKMARK} Docker found"
-		return
-	fi
-
-	if check_command podman; then
-		CONTAINER_RT="podman"
-		CONTAINER_NAME="tashi-depin-worker"
-		log "INFO" "Container Runtime Check: ${CHECKMARK} Podman found"
-		return
-	fi
-
-	log "ERROR" "Container Runtime Check: ${CROSSMARK} Neither Docker nor Podman found"
-	log "INFO" "Please install Docker or Podman:"
-	suggest_install "docker"
-	suggest_install "podman"
-	((ERRORS++))
-}
-
-# Root Check
-check_root_required() {
-	if [[ "$CONTAINER_RT" == "docker" ]]; then
-		if docker info >/dev/null 2>&1; then
-			SUDO_CMD=""
-			log "INFO" "Root Check: ${CHECKMARK} Docker accessible without sudo"
-		elif sudo docker info >/dev/null 2>&1; then
-			SUDO_CMD="sudo"
-			log "WARNING" "Root Check: ${WARNING} Docker requires sudo"
-			log "INFO" "Consider setting up rootless Docker: ${DOCKER_ROOTLESS_LINK}"
-			((WARNINGS++))
-		else
-			log "ERROR" "Root Check: ${CROSSMARK} Cannot access Docker"
-			((ERRORS++))
-		fi
-	elif [[ "$CONTAINER_RT" == "podman" ]]; then
-		if podman info >/dev/null 2>&1; then
-			SUDO_CMD=""
-			log "INFO" "Root Check: ${CHECKMARK} Podman accessible without sudo"
-		elif sudo podman info >/dev/null 2>&1; then
-			SUDO_CMD="sudo"
-			log "WARNING" "Root Check: ${WARNING} Podman requires sudo"
-			log "INFO" "Consider setting up rootless Podman: ${PODMAN_ROOTLESS_LINK}"
-			((WARNINGS++))
-		else
-			log "ERROR" "Root Check: ${CROSSMARK} Cannot access Podman"
-			((ERRORS++))
-		fi
-	fi
-}
-
-# Internet Check
-check_internet() {
-	if curl -s --max-time 5 https://www.google.com >/dev/null 2>&1 || curl -s --max-time 5 https://www.baidu.com >/dev/null 2>&1; then
-		log "INFO" "Internet Check: ${CHECKMARK} Internet connection available"
+	if check_command "docker"; then
+		log "INFO" "Container Runtime Check: ${CHECKMARK} Docker is installed"
+		CONTAINER_RT=docker
+	elif check_command "podman"; then
+		log "INFO" "Container Runtime Check: ${CHECKMARK} Podman is installed"
+		CONTAINER_RT=podman
 	else
-		log "ERROR" "Internet Check: ${CROSSMARK} No internet connection"
+		log "ERROR" "Container Runtime Check: ${CROSSMARK} Neither Docker nor Podman is installed."
+		suggest_install "docker.io"
+		suggest_install "podman"
 		((ERRORS++))
 	fi
 }
 
-# NAT Check
-check_nat() {
-	local public_ip=$(curl -s --max-time 5 https://api.ipify.org 2>/dev/null || curl -s --max-time 5 https://ifconfig.me 2>/dev/null || echo "")
-	
-	if [[ -z "$public_ip" ]]; then
-		log "WARNING" "NAT Check: ${WARNING} Could not determine public IP"
-		return
-	fi
-	
-	local local_ip=""
-	case "$OS" in
-		"macos")
-			local_ip=$(ipconfig getifaddr en0 2>/dev/null || ipconfig getifaddr en1 2>/dev/null || echo "")
-			;;
-		*)
-			local_ip=$(ip route get 8.8.8.8 2>/dev/null | awk '{print $7; exit}' || echo "")
-			;;
-	esac
-	
-	if [[ -n "$local_ip" && "$public_ip" != "$local_ip" ]]; then
-		log "INFO" "NAT Check: ${CHECKMARK} Detected NAT (Public IP: $public_ip, Local IP: $local_ip)"
-		log "INFO" "Your worker will be accessible via the public IP address."
+# Check network connectivity & NAT status
+check_internet() {
+	# Step 1: Confirm Public Internet Access (No ICMP Required)
+	if curl -s --head --connect-timeout 3 https://google.com | grep "HTTP" >/dev/null 2>&1; then
+		log "INFO" "Internet Connectivity: ${CHECKMARK} Device has public Internet access."
+	elif wget --spider --timeout=3 --quiet https://google.com; then
+		log "INFO" "Internet Connectivity: ${CHECKMARK} Device has public Internet access."
 	else
-		log "INFO" "NAT Check: ${CHECKMARK} No NAT detected (Public IP: $public_ip)"
+		log "ERROR" "Internet Connectivity: ${CROSSMARK} No internet access detected!"
+		((ERRORS++))
 	fi
-	
-	PUBLIC_IP="$public_ip"
 }
 
-# Check Warnings
-check_warnings() {
-	if [[ $WARNINGS -gt 0 && "${IGNORE_WARNINGS:-}" != "y" ]]; then
-		log "WARNING" "Found $WARNINGS warning(s). Use --ignore-warnings to continue anyway."
-		if [[ "${YES:-}" != "1" ]]; then
-			echo -n "Continue anyway? (y/N) "
-			read -r choice </dev/tty
-			if [[ "$choice" != [yY] ]]; then
-				exit 1
-			fi
+get_local_ip() {
+	if [[ "$OS" == "macos" ]]; then
+		LOCAL_IP=$(ifconfig -l | xargs -n1 ipconfig getifaddr)
+	elif check_command hostname; then
+		LOCAL_IP=$(hostname -I | awk '{print $1}')
+	elif check_command ip; then
+		# Use `ip route` to find what IP address connects to the internet
+		LOCAL_IP=$(ip route get '1.0.0.0' | grep -Po "src \K(\S+)")
+	fi
+}
+
+get_public_ip() {
+	PUBLIC_IP=$(curl -s https://api.ipify.org || wget -qO- https://api.ipify.org)
+}
+
+check_nat() {
+	local nat_message=$(
+		cat <<-EOF
+			If this device is not accessible from the Internet, some DePIN services will be disabled;
+			earnings may be less than a publicly accessible node.
+
+			For maximum earning potential, ensure UDP port $AGENT_PORT is forwarded to this device.
+			Consult your router’s manual or contact your Internet Service Provider for details.
+		EOF
+	);
+
+	# Step 2: Get local & public IP
+	get_local_ip
+	get_public_ip
+
+	if [[ -z "$LOCAL_IP" ]]; then
+		log "WARNING" "NAT Check: ${WARNING} Could not determine local IP."
+		log "WARNING" "$nat_message"
+		return
+	fi
+
+	if [[ -z "$PUBLIC_IP" ]]; then
+		log "WARNING" "NAT Check: ${WARNING} Could not determine public IP."
+		log "WARNING" "$nat_message"
+		return
+	fi
+
+	# Step 3: Determine NAT Type
+	if [[ "$LOCAL_IP" == "$PUBLIC_IP" ]]; then
+		log "INFO" "NAT Check: ${CHECKMARK} Open NAT / Publicly accessible (Public IP: $PUBLIC_IP)"
+		return
+	fi
+
+	log "WARNING" "NAT Check: NAT detected (Local: $LOCAL_IP, Public: $PUBLIC_IP)"
+	log "WARNING" "$nat_message"
+}
+
+check_root_required() {
+	# Docker and Podman on Mac run a Linux VM. The client commands outside the VM do not require root.
+	if [[ "$OS" == "macos" ]]; then
+		SUDO_CMD=''
+		log "INFO" "Privilege Check: ${CHECKMARK} Root privileges are not needed on MacOS"
+		return
+	fi
+
+	if [[ "$CONTAINER_RT" == "docker" ]]; then
+		if (groups "$USER" | grep docker >/dev/null); then
+			log "INFO" "Privilege Check: ${CHECKMARK} User is in 'docker' group."
+			log "INFO" "Worker container can be started without needing superuser privileges."
+		elif [[ -w "$DOCKER_HOST" ]] || [[ -w "/var/run/docker.sock" ]]; then
+			log "INFO" "Privilege Check: ${CHECKMARK} User has access to the Docker daemon socket."
+			log "INFO" "Worker container can be started without needing superuser privileges."
+		else
+			SUDO_CMD="sudo -g docker"
+			log "WARNING" "Privilege Check: ${WARNING} User is not in 'docker' group."
+			log "WARNING" <<-EOF
+				${WARNING} 'docker run' command will be executed using '${SUDO_CMD}'
+				You may be prompted for your password during setup.
+
+				Rootless configuration is recommended to avoid this requirement.
+				For more information, see $DOCKER_ROOTLESS_LINK
+			EOF
+			((WARNINGS++))
+		fi
+	elif [[ "$CONTAINER_RT" == "podman" ]]; then
+		# Check that the user and their login group are assigned substitute ID ranges
+		if (grep "^$USER:" /etc/subuid >/dev/null) && (grep "^$(id -gn):" /etc/subgid >/dev/null); then
+			log "INFO" "Privilege Check: ${CHECKMARK} User can create Podman containers without root."
+			log "INFO" "Worker container can be started without needing superuser privileges."
+		else
+			SUDO_CMD="sudo"
+			log "WARNING" "Privilege Check: ${WARNING} User cannot create rootless Podman containers."
+			log "WARNING" <<-EOF
+				${WARNING} 'podman run' command will be executed using '${SUDO_CMD}'
+				You may be prompted for your sudo password during setup.
+
+				Rootless configuration is recommended to avoid this requirement.
+				For more information, see $PODMAN_ROOTLESS_LINK
+			EOF
+			((WARNINGS++))
 		fi
 	fi
+}
 
-	if [[ $ERRORS -gt 0 ]]; then
-		log "ERROR" "Found $ERRORS error(s). Please fix them before continuing."
+prompt_auto_updates() {
+	log "INFO" <<-EOF
+		Your DePIN worker will require periodic updates to ensure that it keeps up with new features and bug fixes.
+		Out-of-date workers may be excluded from the DePIN network and be unable to complete jobs or earn rewards.
+
+		We recommend enabling automatic updates, which take place entirely in the container
+		and do not make any changes to your system.
+
+		Otherwise, you will need to check the worker logs regularly to see when a new update is available,
+		and apply the update manually.\n
+	EOF
+
+	local choice=n
+
+	if [[ (-t 2)]]; then # If stderr is not connected to a TTY, we can't prompt.
+		prompt "Enable automatic updates? (Y/n) " choice
+	fi
+
+	# Blank line
+	echo ""
+
+	case "$choice" in
+		n | N)
+			log "INFO" "Automatic updates $(make_bold 'disabled'). For manual upgrade instructions, see:\n$MANUAL_UPDATE_LINK"
+			;;
+		*)
+			log "INFO" "Automatic updates enabled."
+			AUTO_UPDATE=y
+			;;
+	esac
+}
+
+prompt() {
+	local prompt="${1?}"
+	local variable="${2?}"
+
+	# read -p in zsh is "read from coprocess", whatever that means
+	printf "%b" "$prompt"
+
+	# Always read from TTY even if piped in
+	read -r "${variable?}" </dev/tty
+
+	return $?
+}
+
+check_warnings() {
+	if [[ "$ERRORS" -gt 0 ]]; then
+		log "ERROR" "System does not meet minimum requirements. Exiting."
+		exit 1
+	elif [[ "$WARNINGS" -eq 0 ]]; then
+		log "INFO" "System requirements met."
+		return
+	fi
+
+	log "WARNING" "System meets minimum but not recommended requirements.\n"
+
+	if [[ "$IGNORE_WARNINGS" ]]; then
+			log "INFO" "'--ignore-warnings' was passed. Continuing with installation."
+			return
+	fi
+
+	if [[ ! (-t 2) && ! $YES ]]; then # If stderr is not connected to a TTY, we can't prompt.
+		log "ERROR" "Cannot prompt to continue. Re-run this with '--ignore-warnings' to continue installation."
 		exit 1
 	fi
-}
 
-# Prompt for auto-updates
-prompt_auto_updates() {
-	if [[ "${AUTO_UPDATE:-}" == "y" ]]; then
-		return
-	fi
+	prompt "Do you want to continue anyway? (y/N) " choice
 
-	if [[ "${YES:-}" == "1" ]]; then
-		return
-	fi
-
-	log "INFO" "Auto-updates: The worker can automatically update itself when new versions are available."
-	echo -n "Enable auto-updates? (Y/n) "
-	read -r choice </dev/tty
-
-	if [[ "$choice" != [nN] ]]; then
-		AUTO_UPDATE=y
-	fi
-}
-
-# Prompt to continue
-prompt_continue() {
-	if [[ "${YES:-}" == "1" ]]; then
-		return
-	fi
-
-	log "INFO" "All checks passed. Ready to install."
-	echo -n "Continue with installation? (Y/n) "
-	read -r choice </dev/tty
-
-	if [[ "$choice" == [nN] ]]; then
+	if [[ "$choice" != [yY] ]]; then
 		exit 0
 	fi
 }
 
-# Make setup command
-make_setup_cmd() {
-	local cmd="${SUDO_CMD:+"$SUDO_CMD "}${CONTAINER_RT}"
-	local name="$CONTAINER_NAME-setup"
-	local auth_dir="/var/lib/tashi-depin-worker"
-	local auth_volume="tashi-depin-worker-auth"
-	local auto_update_arg=""
-	
-	if [[ "${AUTO_UPDATE:-}" == "y" ]]; then
-		auto_update_arg="--auto-update"
+prompt_continue() {
+	if [[ ! (-t 2) && ! $YES ]]; then # If stderr is not connected to a TTY, we can't prompt.
+		log "ERROR" "Cannot prompt to continue. Re-run this with '--yes' to continue installation."
+		exit 1
 	fi
 
-	cat <<-EOF
-		${cmd} run --rm -it \\
-			--mount type=volume,src=$auth_volume,dst=$auth_dir \\
-			--name "$name" -e RUST_LOG="$RUST_LOG" \\
-			$PLATFORM_ARG $IMAGE_TAG \\
-			setup $auth_dir $auto_update_arg
-	EOF
+	prompt "Ready to $SUBCOMMAND worker node. Do you want to continue? (Y/n) " choice
+
+	if [[ "$choice" == [nN] ]]; then
+		exit 0
+	fi
+
+	echo ""
 }
 
-# Make run command
+CONTAINER_NAME=tashi-depin-worker
+AUTH_VOLUME=tashi-depin-worker-auth
+AUTH_DIR="/home/worker/auth"
+
+# Docker rejects `--pull=always` with an image SHA
+PULL_FLAG=$([[ "$IMAGE_TAG" == ghcr* ]] && echo "--pull=always")
+
+# shellcheck disable=SC2120
+make_setup_cmd() {
+		local sudo="${1-$SUDO_CMD}"
+
+		cat <<-EOF
+			${sudo:+"$sudo "}${CONTAINER_RT} run --rm -it \\
+				--mount type=volume,src=$AUTH_VOLUME,dst=$AUTH_DIR \\
+				$PULL_FLAG $PLATFORM_ARG $IMAGE_TAG \\
+				interactive-setup $AUTH_DIR
+		EOF
+}
+
 make_run_cmd() {
 	local sudo="${1-$SUDO_CMD}"
 	local cmd="${2-"run -d"}"
 	local name="${3-$CONTAINER_NAME}"
 	local volumes_from="${4+"--volumes-from=$4"}"
 
-	local auth_dir="/var/lib/tashi-depin-worker"
-	local auth_volume="tashi-depin-worker-auth"
 	local auto_update_arg=''
 	local restart_arg=''
-	local pull_flag=''
 
 	if [[ $AUTO_UPDATE == "y" ]]; then
-		auto_update_arg="--auto-update"
+		auto_update_arg="--unstable-update-download-path /tmp/tashi-depin-worker"
 	fi
 
 	if [[ "$CONTAINER_RT" == "docker" ]]; then
@@ -442,10 +506,10 @@ make_run_cmd() {
 
 	cat <<-EOF
 		${sudo:+"$sudo "}${CONTAINER_RT} $cmd -p "$AGENT_PORT:$AGENT_PORT" -p 127.0.0.1:9000:9000 \\
-				--mount type=volume,src=$auth_volume,dst=$auth_dir \\
+				--mount type=volume,src=$AUTH_VOLUME,dst=$AUTH_DIR \\
 				--name "$name" -e RUST_LOG="$RUST_LOG" $volumes_from \\
-				$pull_flag $restart_arg $PLATFORM_ARG $IMAGE_TAG \\
-				run $auth_dir \\
+				$PULL_FLAG $restart_arg $PLATFORM_ARG $IMAGE_TAG \\
+				run $AUTH_DIR \\
 				$auto_update_arg \\
 				${PUBLIC_IP:+"--agent-public-addr=$PUBLIC_IP:$AGENT_PORT"}
 	EOF
@@ -491,7 +555,7 @@ update() {
 	local container_old="$CONTAINER_NAME"
 	local container_new="$CONTAINER_NAME-new"
 
-	local create_cmd=$(make_run_cmd "" "create -d" "$container_new" "$container_old")
+	local create_cmd=$(make_run_cmd "" "create" "$container_new" "$container_old")
 
 	# Execute this whole next block as `sudo` if necessary.
 	# Piping means the sub-process reads line by line and can tell us right where it failed.
@@ -630,4 +694,3 @@ case "$SUBCOMMAND" in
 esac
 
 post_install
-
