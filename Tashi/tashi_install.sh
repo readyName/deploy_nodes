@@ -519,72 +519,16 @@ install() {
 
 	local setup_cmd=$(make_setup_cmd)
 
-	# 使用管道处理输出，提取 node ID 并添加中文提示
-	local node_id=""
-	local temp_output=$(mktemp)
-	
-	# 创建一个函数来处理输出并提取 node ID
-	process_output() {
-		while IFS= read -r line; do
-			# 输出原始行
-			echo "$line"
-			
-			# 尝试提取 node ID
-			if echo "$line" | grep -q "node="; then
-				local extracted_node=$(echo "$line" | grep -o "node=[A-Za-z0-9]*" | head -1 | cut -d'=' -f2)
-				if [[ -n "$extracted_node" && -z "$node_id" ]]; then
-					node_id="$extracted_node"
-					echo ""
-					log "INFO" "═══════════════════════════════════════════════════════════════"
-					log "INFO" "🔑 节点 ID（Node ID）"
-					log "INFO" "═══════════════════════════════════════════════════════════════"
-					log "INFO" ""
-					log "INFO" "您的节点 ID: ${node_id}"
-					log "INFO" ""
-					log "INFO" "完整授权 URL 请查看上方容器输出"
-					log "INFO" "═══════════════════════════════════════════════════════════════"
-					echo ""
-				fi
-			fi
-			
-			# 检查是否是授权提示行，如果是则添加中文翻译
-			if echo "$line" | grep -q "Navigate to the following page"; then
-				echo ""
-				log "INFO" "📌 请按照以下步骤操作："
-				log "INFO" "   1. 在浏览器中打开上方显示的授权页面 URL"
-				log "INFO" "   2. 完成授权操作后，复制授权令牌（authorization token）"
-				log "INFO" ""
-			elif echo "$line" | grep -q "paste the authorization token"; then
-				log "INFO" "   3. 将授权令牌粘贴到下方并按 Enter 键："
-				echo ""
-			fi
-		done
-	}
+	# 直接执行交互式命令（不使用管道，保持 stdin 连接）
+	# 注意：交互式 docker 命令需要直接连接到终端，不能通过管道
+	log "INFO" "正在启动交互式设置容器..."
+	echo ""
+	log "INFO" "💡 提示：当看到授权页面 URL 时，请记下其中的节点 ID（node=后面的字符串）"
+	echo ""
 
-	# 执行 setup 命令并通过 process_output 处理输出
-	sh -c "set -ex; $setup_cmd" 2>&1 | process_output | tee "$temp_output"
-	
-	# 获取第一个命令的退出码
-	local exit_code=${PIPESTATUS[0]}
-	
-	# 如果还没有提取到 node_id，尝试从临时文件中提取
-	if [[ -z "$node_id" ]]; then
-		node_id=$(grep -o "node=[A-Za-z0-9]*" "$temp_output" 2>/dev/null | head -1 | cut -d'=' -f2)
-		if [[ -n "$node_id" ]]; then
-			echo ""
-			log "INFO" "═══════════════════════════════════════════════════════════════"
-			log "INFO" "🔑 节点 ID（Node ID）"
-			log "INFO" "═══════════════════════════════════════════════════════════════"
-			log "INFO" ""
-			log "INFO" "您的节点 ID: ${node_id}"
-			log "INFO" ""
-			log "INFO" "═══════════════════════════════════════════════════════════════"
-			echo ""
-		fi
-	fi
-	
-	# 清理临时文件
-	rm -f "$temp_output"
+	sh -c "set -ex; $setup_cmd"
+
+	local exit_code=$?
 
 	echo ""
 
