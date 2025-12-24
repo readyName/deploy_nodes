@@ -498,11 +498,93 @@ install() {
 
 	log "INFO" "Starting worker in interactive setup mode.\n"
 
+	# 显示中文提示信息
+	echo ""
+	log "INFO" "═══════════════════════════════════════════════════════════════"
+	log "INFO" "📋 节点授权说明"
+	log "INFO" "═══════════════════════════════════════════════════════════════"
+	log "INFO" ""
+	log "INFO" "DePIN Worker 必须由已质押 \$TASHI 的操作者地址授权。"
+	log "INFO" ""
+	log "INFO" "请按照以下步骤完成授权："
+	log "INFO" "1. 在浏览器中打开授权页面（稍后会显示完整 URL）"
+	log "INFO" "2. 完成授权操作"
+	log "INFO" "3. 复制授权令牌（authorization token）"
+	log "INFO" "4. 粘贴到终端并按 Enter 键"
+	log "INFO" ""
+	log "INFO" "⚠️  注意：授权页面 URL 中包含节点 ID（node=...），请确保使用正确的节点 ID"
+	log "INFO" ""
+	log "INFO" "═══════════════════════════════════════════════════════════════"
+	echo ""
+
 	local setup_cmd=$(make_setup_cmd)
 
-	sh -c "set -ex; $setup_cmd"
+	# 使用管道处理输出，提取 node ID 并添加中文提示
+	local node_id=""
+	local temp_output=$(mktemp)
+	
+	# 创建一个函数来处理输出并提取 node ID
+	process_output() {
+		while IFS= read -r line; do
+			# 输出原始行
+			echo "$line"
+			
+			# 尝试提取 node ID
+			if echo "$line" | grep -q "node="; then
+				local extracted_node=$(echo "$line" | grep -o "node=[A-Za-z0-9]*" | head -1 | cut -d'=' -f2)
+				if [[ -n "$extracted_node" && -z "$node_id" ]]; then
+					node_id="$extracted_node"
+					echo ""
+					log "INFO" "═══════════════════════════════════════════════════════════════"
+					log "INFO" "🔑 节点 ID（Node ID）"
+					log "INFO" "═══════════════════════════════════════════════════════════════"
+					log "INFO" ""
+					log "INFO" "您的节点 ID: ${node_id}"
+					log "INFO" ""
+					log "INFO" "完整授权 URL 请查看上方容器输出"
+					log "INFO" "═══════════════════════════════════════════════════════════════"
+					echo ""
+				fi
+			fi
+			
+			# 检查是否是授权提示行，如果是则添加中文翻译
+			if echo "$line" | grep -q "Navigate to the following page"; then
+				echo ""
+				log "INFO" "📌 请按照以下步骤操作："
+				log "INFO" "   1. 在浏览器中打开上方显示的授权页面 URL"
+				log "INFO" "   2. 完成授权操作后，复制授权令牌（authorization token）"
+				log "INFO" ""
+			elif echo "$line" | grep -q "paste the authorization token"; then
+				log "INFO" "   3. 将授权令牌粘贴到下方并按 Enter 键："
+				echo ""
+			fi
+		done
+	}
 
-	local exit_code=$?
+	# 执行 setup 命令并通过 process_output 处理输出
+	sh -c "set -ex; $setup_cmd" 2>&1 | process_output | tee "$temp_output"
+	
+	# 获取第一个命令的退出码
+	local exit_code=${PIPESTATUS[0]}
+	
+	# 如果还没有提取到 node_id，尝试从临时文件中提取
+	if [[ -z "$node_id" ]]; then
+		node_id=$(grep -o "node=[A-Za-z0-9]*" "$temp_output" 2>/dev/null | head -1 | cut -d'=' -f2)
+		if [[ -n "$node_id" ]]; then
+			echo ""
+			log "INFO" "═══════════════════════════════════════════════════════════════"
+			log "INFO" "🔑 节点 ID（Node ID）"
+			log "INFO" "═══════════════════════════════════════════════════════════════"
+			log "INFO" ""
+			log "INFO" "您的节点 ID: ${node_id}"
+			log "INFO" ""
+			log "INFO" "═══════════════════════════════════════════════════════════════"
+			echo ""
+		fi
+	fi
+	
+	# 清理临时文件
+	rm -f "$temp_output"
 
 	echo ""
 
@@ -653,7 +735,7 @@ horizontal_line
 
 # Integrated NAT check. This is separate from system requirements because most manually started worker nodes
 # are expected to be behind some sort of NAT, so this is mostly informational.
-check_nat
+# check_nat  # 已跳过 NAT 检测（信息性检查，不影响安装）
 
 horizontal_line
 
