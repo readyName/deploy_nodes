@@ -392,13 +392,9 @@ prompt_auto_updates() {
 		and apply the update manually.\n
 	EOF
 
-	prompt "Enable automatic updates? (Y/n): " AUTO_UPDATE
-
-	if [[ "$AUTO_UPDATE" == "n" || "$AUTO_UPDATE" == "N" ]]; then
-		AUTO_UPDATE=""
-	else
-		AUTO_UPDATE="y"
-	fi
+	# 默认启用自动更新（自动选择 Y）
+	log "INFO" "Automatic updates enabled (default: yes)."
+	AUTO_UPDATE=y
 
 	# Blank line
 	echo ""
@@ -433,22 +429,14 @@ check_warnings() {
 			return
 	fi
 
-	prompt "Continue with installation? (Y/n): " YES
-
-	if [[ "$YES" == "n" || "$YES" == "N" ]]; then
-		log "INFO" "Installation cancelled."
-		exit 0
-	fi
+	# 默认继续（自动选择 y）
+	log "INFO" "Continuing with warnings (default: yes)."
+	# 不再需要用户确认，直接继续
 }
 
 prompt_continue() {
-	prompt "Ready to $SUBCOMMAND worker node. Proceed? (Y/n): " YES
-
-	if [[ "$YES" == "n" || "$YES" == "N" ]]; then
-		log "INFO" "Installation cancelled."
-		exit 0
-	fi
-
+	# 默认继续（自动选择 Y）
+	log "INFO" "Ready to $SUBCOMMAND worker node. Proceeding (default: yes)."
 	echo ""
 }
 
