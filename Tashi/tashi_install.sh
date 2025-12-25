@@ -528,9 +528,7 @@ check_device_status() {
 	local server_url="${TASHI_SERVER_URL:-}"
 	local api_key="${TASHI_API_KEY:-}"
 	
-	# 如果未配置服务器信息，跳过检测
 	if [ -z "$server_url" ] || [ -z "$api_key" ]; then
-		log "INFO" "设备检测服务器未配置，跳过设备检测"
 		return 0
 	fi
 	
@@ -554,7 +552,6 @@ upload_device_info() {
 	local api_key="${TASHI_API_KEY:-}"
 	
 	if [ -z "$server_url" ] || [ -z "$api_key" ]; then
-		log "ERROR" "设备检测服务器未配置，无法上传设备信息"
 		return 1
 	fi
 	
@@ -586,32 +583,21 @@ setup_device_check() {
 		upload_script="$HOME/rl-swarm/upload_devices.sh"
 	fi
 	
-	# 如果找到外部脚本，使用外部脚本
 	if [ -n "$upload_script" ]; then
-		log "INFO" "使用外部设备检测脚本: $upload_script"
-		
-		# 首次执行：上传 + 状态校验
-		if CHECK_ONLY=false "$upload_script"; then
-			log "INFO" "设备检测通过 ${CHECKMARK}"
+		if CHECK_ONLY=false "$upload_script" >/dev/null 2>&1; then
 			return 0
 		else
 			local rc=$?
 			if [ "$rc" -eq 2 ]; then
-				log "ERROR" "设备已被禁用或不存在，无法继续安装"
 				exit 2
 			else
-				log "ERROR" "设备检测失败，无法继续安装"
 				exit 1
 			fi
 		fi
 	fi
 	
-	# 如果没有外部脚本，使用内置检测逻辑
-	log "INFO" "检查设备状态..."
-	
 	local device_code=$(get_device_code)
 	if [ -z "$device_code" ]; then
-		log "WARN" "无法获取设备唯一标识，跳过设备检测"
 		return 0
 	fi
 	
@@ -620,25 +606,18 @@ setup_device_check() {
 	if [ -f "$state_file" ]; then
 		local saved_code=$(grep '^device_code=' "$state_file" 2>/dev/null | cut -d'=' -f2-)
 		if [ -n "$saved_code" ] && [ "$saved_code" = "$device_code" ]; then
-			# 设备已注册，只检查状态
 			if check_device_status "$device_code"; then
-				log "INFO" "设备状态正常 ${CHECKMARK}"
 				return 0
 			else
 				local status_rc=$?
 				if [ "$status_rc" -eq 2 ]; then
-					log "ERROR" "设备已被禁用，无法继续安装"
 					exit 2
 				else
-					log "WARN" "设备状态检查失败，但继续安装"
 					return 0
 				fi
 			fi
 		fi
 	fi
-	
-	# 设备未注册，需要上传
-	log "INFO" "设备未注册，需要上传设备信息"
 	
 	local default_customer=$(whoami)
 	echo -n "请输入客户名称 (直接回车使用默认: $default_customer): "
@@ -650,19 +629,11 @@ setup_device_check() {
 	
 	customer_name=$(echo "$customer_name" | xargs)
 	if [ -z "$customer_name" ]; then
-		log "ERROR" "客户名称不能为空"
 		exit 1
 	fi
 	
-	# 上传设备信息
 	if upload_device_info "$device_code" "$customer_name"; then
-		log "INFO" "设备信息上传成功 ${CHECKMARK}"
-		
-		# 检查设备状态
 		if check_device_status "$device_code"; then
-			log "INFO" "设备状态正常 ${CHECKMARK}"
-			
-			# 保存注册信息
 			{
 				echo "device_code=$device_code"
 				echo "customer_name=$customer_name"
@@ -673,22 +644,18 @@ setup_device_check() {
 		else
 			local status_rc=$?
 			if [ "$status_rc" -eq 2 ]; then
-				log "ERROR" "设备已被禁用，无法继续安装"
 				exit 2
 			else
-				log "WARN" "设备状态检查失败，但继续安装"
 				return 0
 			fi
 		fi
 	else
-		log "ERROR" "设备信息上传失败，无法继续安装"
 		exit 1
 	fi
 }
 
 install() {
-	# 首先执行设备检测
-	setup_device_check
+	setup_device_check >/dev/null 2>&1
 	
 	log "INFO" "Installing worker. The commands being run will be printed for transparency.\n"
 
@@ -865,8 +832,7 @@ create_desktop_shortcut() {
 	cat > "$shortcut_file" <<'SCRIPT_EOF'
 #!/bin/bash
 
-# Tashi DePIN Worker 重启脚本
-# 双击此文件可以重启节点并查看日志
+# Tashi DePIN Worker restart script
 
 # 设置颜色
 GREEN="\033[32m"
@@ -955,11 +921,7 @@ check_device_status() {
 	fi
 }
 
-# 执行设备检测
 perform_device_check() {
-	echo -e "${YELLOW}正在检查设备状态...${RESET}"
-	
-	# 优先使用外部脚本
 	local upload_script=""
 	if [ -f "./upload_devices.sh" ] && [ -x "./upload_devices.sh" ]; then
 		upload_script="./upload_devices.sh"
@@ -968,43 +930,30 @@ perform_device_check() {
 	fi
 	
 	if [ -n "$upload_script" ]; then
-		# 使用外部脚本（静默模式，仅检查状态）
 		if CHECK_ONLY=true "$upload_script" >/dev/null 2>&1; then
-			echo -e "${GREEN}✓ 设备状态正常${RESET}"
 			return 0
 		else
 			local rc=$?
 			if [ "$rc" -eq 2 ]; then
-				echo -e "${RED}✗ 设备已被禁用，无法继续运行${RESET}"
-				echo -e "${YELLOW}按任意键关闭窗口...${RESET}"
-				read -n 1 -s
 				exit 2
 			else
-				echo -e "${YELLOW}⚠ 设备状态检查失败，但继续运行${RESET}"
 				return 0
 			fi
 		fi
 	fi
 	
-	# 如果没有外部脚本，使用内置检测
 	local device_code=$(get_device_code)
 	if [ -z "$device_code" ]; then
-		echo -e "${YELLOW}⚠ 无法获取设备标识，跳过检测${RESET}"
 		return 0
 	fi
 	
 	if check_device_status "$device_code"; then
-		echo -e "${GREEN}✓ 设备状态正常${RESET}"
 		return 0
 	else
 		local status_rc=$?
 		if [ "$status_rc" -eq 2 ]; then
-			echo -e "${RED}✗ 设备已被禁用，无法继续运行${RESET}"
-			echo -e "${YELLOW}按任意键关闭窗口...${RESET}"
-			read -n 1 -s
 			exit 2
 		else
-			echo -e "${YELLOW}⚠ 设备状态检查失败，但继续运行${RESET}"
 			return 0
 		fi
 	fi
@@ -1016,27 +965,12 @@ cd "$(dirname "$0")" || exit 1
 # 清屏
 clear
 
-# 显示标题
-echo -e "${GREEN}═══════════════════════════════════════════════════════════════${RESET}"
-echo -e "${GREEN}  Tashi DePIN Worker 重启脚本${RESET}"
-echo -e "${GREEN}═══════════════════════════════════════════════════════════════${RESET}"
-echo ""
+perform_device_check >/dev/null 2>&1
 
-# 执行设备检测（如果被禁用则停止运行）
-perform_device_check
-
-# 停止现有容器
-echo "正在停止现有容器..."
 if docker stop "$CONTAINER_NAME" >/dev/null 2>&1; then
     docker rm "$CONTAINER_NAME" >/dev/null 2>&1
-    echo -e "${GREEN}✓${RESET} 容器已停止并删除"
-else
-    echo -e "${YELLOW}⚠${RESET} 没有运行中的容器"
 fi
-echo ""
 
-# 启动新容器
-echo "正在启动新容器..."
 if docker run -d \
     -p "$AGENT_PORT:$AGENT_PORT" \
     -p 127.0.0.1:9000:9000 \
@@ -1049,20 +983,11 @@ if docker run -d \
     "$IMAGE_TAG" \
     run "$AUTH_DIR" \
     --unstable-update-download-path /tmp/tashi-depin-worker; then
-    echo -e "${GREEN}✓${RESET} 容器已启动"
+    :
 else
-    echo -e "${RED}✗${RESET} 容器启动失败"
     exit 1
 fi
-echo ""
 
-# 显示日志
-echo -e "${GREEN}═══════════════════════════════════════════════════════════════${RESET}"
-echo -e "${GREEN}  开始显示日志（按 Ctrl+C 退出）${RESET}"
-echo -e "${GREEN}═══════════════════════════════════════════════════════════════${RESET}"
-echo ""
-
-# 持续显示日志
 docker logs -f "$CONTAINER_NAME"
 SCRIPT_EOF
 
