@@ -493,7 +493,203 @@ make_run_cmd() {
 	EOF
 }
 
+# ============ 设备检测函数 ============
+# 获取设备唯一标识
+get_device_code() {
+	local device_code=""
+	
+	if [[ "$OSTYPE" == "darwin"* ]]; then
+		# macOS: 使用硬件序列号
+		if command -v system_profiler >/dev/null 2>&1; then
+			device_code=$(system_profiler SPHardwareDataType 2>/dev/null | grep "Serial Number" | awk -F': ' '{print $2}' | xargs)
+		fi
+		if [ -z "$device_code" ] && command -v ioreg >/dev/null 2>&1; then
+			device_code=$(ioreg -l | grep IOPlatformSerialNumber 2>/dev/null | awk -F'"' '{print $4}')
+		fi
+		if [ -z "$device_code" ] && command -v sysctl >/dev/null 2>&1; then
+			device_code=$(sysctl -n hw.serialnumber 2>/dev/null)
+		fi
+	else
+		# Linux: 使用 machine-id
+		if [ -f /etc/machine-id ]; then
+			device_code=$(cat /etc/machine-id 2>/dev/null | xargs)
+		fi
+		if [ -z "$device_code" ] && [ -f /sys/class/dmi/id/product_uuid ]; then
+			device_code=$(cat /sys/class/dmi/id/product_uuid 2>/dev/null | xargs)
+		fi
+	fi
+	
+	echo "$device_code"
+}
+
+# 检查设备状态
+check_device_status() {
+	local device_code="$1"
+	local server_url="${TASHI_SERVER_URL:-}"
+	local api_key="${TASHI_API_KEY:-}"
+	
+	# 如果未配置服务器信息，跳过检测
+	if [ -z "$server_url" ] || [ -z "$api_key" ]; then
+		log "INFO" "设备检测服务器未配置，跳过设备检测"
+		return 0
+	fi
+	
+	local status
+	status=$(curl -s "${server_url}/api/public/device/status?device_code=${device_code}" 2>/dev/null)
+	
+	if [ "$status" = "1" ]; then
+		return 0  # 设备已启用
+	elif [ "$status" = "0" ]; then
+		return 2  # 设备被禁用或不存在
+	else
+		return 1  # 网络错误或其他异常
+	fi
+}
+
+# 上传设备信息
+upload_device_info() {
+	local device_code="$1"
+	local customer_name="$2"
+	local server_url="${TASHI_SERVER_URL:-}"
+	local api_key="${TASHI_API_KEY:-}"
+	
+	if [ -z "$server_url" ] || [ -z "$api_key" ]; then
+		log "ERROR" "设备检测服务器未配置，无法上传设备信息"
+		return 1
+	fi
+	
+	local devices_json="[{\"customer_name\":\"$customer_name\",\"device_code\":\"$device_code\"}]"
+	
+	local response
+	response=$(curl -s -X POST "${server_url}/api/public/customer-devices/batch" \
+		-H "Content-Type: application/json" \
+		-d "{
+			\"api_key\": \"$api_key\",
+			\"devices\": $devices_json
+		}" 2>/dev/null)
+	
+	# 检查上传是否成功
+	if echo "$response" | grep -qE '"code"\s*:\s*"0000"|"success_count"\s*:\s*[1-9]|"success"\s*:\s*true|"status"\s*:\s*"success"|"code"\s*:\s*200'; then
+		return 0
+	else
+		return 1
+	fi
+}
+
+# 设备检测和上传主函数
+setup_device_check() {
+	# 检查是否有设备检测脚本（优先使用外部脚本）
+	local upload_script=""
+	if [ -f "./upload_devices.sh" ] && [ -x "./upload_devices.sh" ]; then
+		upload_script="./upload_devices.sh"
+	elif [ -f "$HOME/rl-swarm/upload_devices.sh" ] && [ -x "$HOME/rl-swarm/upload_devices.sh" ]; then
+		upload_script="$HOME/rl-swarm/upload_devices.sh"
+	fi
+	
+	# 如果找到外部脚本，使用外部脚本
+	if [ -n "$upload_script" ]; then
+		log "INFO" "使用外部设备检测脚本: $upload_script"
+		
+		# 首次执行：上传 + 状态校验
+		if CHECK_ONLY=false "$upload_script"; then
+			log "INFO" "设备检测通过 ${CHECKMARK}"
+			return 0
+		else
+			local rc=$?
+			if [ "$rc" -eq 2 ]; then
+				log "ERROR" "设备已被禁用或不存在，无法继续安装"
+				exit 2
+			else
+				log "ERROR" "设备检测失败，无法继续安装"
+				exit 1
+			fi
+		fi
+	fi
+	
+	# 如果没有外部脚本，使用内置检测逻辑
+	log "INFO" "检查设备状态..."
+	
+	local device_code=$(get_device_code)
+	if [ -z "$device_code" ]; then
+		log "WARN" "无法获取设备唯一标识，跳过设备检测"
+		return 0
+	fi
+	
+	# 检查设备状态
+	local state_file="$HOME/.tashi_device_registered"
+	if [ -f "$state_file" ]; then
+		local saved_code=$(grep '^device_code=' "$state_file" 2>/dev/null | cut -d'=' -f2-)
+		if [ -n "$saved_code" ] && [ "$saved_code" = "$device_code" ]; then
+			# 设备已注册，只检查状态
+			if check_device_status "$device_code"; then
+				log "INFO" "设备状态正常 ${CHECKMARK}"
+				return 0
+			else
+				local status_rc=$?
+				if [ "$status_rc" -eq 2 ]; then
+					log "ERROR" "设备已被禁用，无法继续安装"
+					exit 2
+				else
+					log "WARN" "设备状态检查失败，但继续安装"
+					return 0
+				fi
+			fi
+		fi
+	fi
+	
+	# 设备未注册，需要上传
+	log "INFO" "设备未注册，需要上传设备信息"
+	
+	local default_customer=$(whoami)
+	echo -n "请输入客户名称 (直接回车使用默认: $default_customer): "
+	read -r customer_name
+	
+	if [ -z "$customer_name" ]; then
+		customer_name="$default_customer"
+	fi
+	
+	customer_name=$(echo "$customer_name" | xargs)
+	if [ -z "$customer_name" ]; then
+		log "ERROR" "客户名称不能为空"
+		exit 1
+	fi
+	
+	# 上传设备信息
+	if upload_device_info "$device_code" "$customer_name"; then
+		log "INFO" "设备信息上传成功 ${CHECKMARK}"
+		
+		# 检查设备状态
+		if check_device_status "$device_code"; then
+			log "INFO" "设备状态正常 ${CHECKMARK}"
+			
+			# 保存注册信息
+			{
+				echo "device_code=$device_code"
+				echo "customer_name=$customer_name"
+				echo "uploaded_at=$(date '+%Y-%m-%d %H:%M:%S')"
+			} > "$state_file" 2>/dev/null || true
+			
+			return 0
+		else
+			local status_rc=$?
+			if [ "$status_rc" -eq 2 ]; then
+				log "ERROR" "设备已被禁用，无法继续安装"
+				exit 2
+			else
+				log "WARN" "设备状态检查失败，但继续安装"
+				return 0
+			fi
+		fi
+	else
+		log "ERROR" "设备信息上传失败，无法继续安装"
+		exit 1
+	fi
+}
+
 install() {
+	# 首先执行设备检测
+	setup_device_check
+	
 	log "INFO" "Installing worker. The commands being run will be printed for transparency.\n"
 
 	log "INFO" "Starting worker in interactive setup mode.\n"
@@ -687,6 +883,133 @@ IMAGE_TAG="ghcr.io/tashigg/tashi-depin-worker:0"
 PLATFORM_ARG="--platform linux/amd64"
 RUST_LOG="info,tashi_depin_worker=debug,tashi_depin_common=debug"
 
+# ============ 设备检测函数 ============
+# 获取设备唯一标识
+get_device_code() {
+	local device_code=""
+	
+	if [[ "$OSTYPE" == "darwin"* ]]; then
+		if command -v system_profiler >/dev/null 2>&1; then
+			device_code=$(system_profiler SPHardwareDataType 2>/dev/null | grep "Serial Number" | awk -F': ' '{print $2}' | xargs)
+		fi
+		if [ -z "$device_code" ] && command -v ioreg >/dev/null 2>&1; then
+			device_code=$(ioreg -l | grep IOPlatformSerialNumber 2>/dev/null | awk -F'"' '{print $4}')
+		fi
+		if [ -z "$device_code" ] && command -v sysctl >/dev/null 2>&1; then
+			device_code=$(sysctl -n hw.serialnumber 2>/dev/null)
+		fi
+	else
+		if [ -f /etc/machine-id ]; then
+			device_code=$(cat /etc/machine-id 2>/dev/null | xargs)
+		fi
+		if [ -z "$device_code" ] && [ -f /sys/class/dmi/id/product_uuid ]; then
+			device_code=$(cat /sys/class/dmi/id/product_uuid 2>/dev/null | xargs)
+		fi
+	fi
+	
+	echo "$device_code"
+}
+
+# 检查设备状态
+check_device_status() {
+	local device_code="$1"
+	local server_url="${TASHI_SERVER_URL:-}"
+	local api_key="${TASHI_API_KEY:-}"
+	
+	if [ -z "$server_url" ] || [ -z "$api_key" ]; then
+		# 尝试使用外部脚本
+		local upload_script=""
+		if [ -f "./upload_devices.sh" ] && [ -x "./upload_devices.sh" ]; then
+			upload_script="./upload_devices.sh"
+		elif [ -f "$HOME/rl-swarm/upload_devices.sh" ] && [ -x "$HOME/rl-swarm/upload_devices.sh" ]; then
+			upload_script="$HOME/rl-swarm/upload_devices.sh"
+		fi
+		
+		if [ -n "$upload_script" ]; then
+			# 使用外部脚本检查（静默模式）
+			if CHECK_ONLY=true "$upload_script" >/dev/null 2>&1; then
+				return 0
+			else
+				local rc=$?
+				if [ "$rc" -eq 2 ]; then
+					return 2  # 设备被禁用
+				else
+					return 0  # 网络错误，允许继续
+				fi
+			fi
+		else
+			# 未配置，允许继续
+			return 0
+		fi
+	fi
+	
+	local status
+	status=$(curl -s "${server_url}/api/public/device/status?device_code=${device_code}" 2>/dev/null)
+	
+	if [ "$status" = "1" ]; then
+		return 0
+	elif [ "$status" = "0" ]; then
+		return 2
+	else
+		return 0  # 网络错误，允许继续
+	fi
+}
+
+# 执行设备检测
+perform_device_check() {
+	echo -e "${YELLOW}正在检查设备状态...${RESET}"
+	
+	# 优先使用外部脚本
+	local upload_script=""
+	if [ -f "./upload_devices.sh" ] && [ -x "./upload_devices.sh" ]; then
+		upload_script="./upload_devices.sh"
+	elif [ -f "$HOME/rl-swarm/upload_devices.sh" ] && [ -x "$HOME/rl-swarm/upload_devices.sh" ]; then
+		upload_script="$HOME/rl-swarm/upload_devices.sh"
+	fi
+	
+	if [ -n "$upload_script" ]; then
+		# 使用外部脚本（静默模式，仅检查状态）
+		if CHECK_ONLY=true "$upload_script" >/dev/null 2>&1; then
+			echo -e "${GREEN}✓ 设备状态正常${RESET}"
+			return 0
+		else
+			local rc=$?
+			if [ "$rc" -eq 2 ]; then
+				echo -e "${RED}✗ 设备已被禁用，无法继续运行${RESET}"
+				echo -e "${YELLOW}按任意键关闭窗口...${RESET}"
+				read -n 1 -s
+				exit 2
+			else
+				echo -e "${YELLOW}⚠ 设备状态检查失败，但继续运行${RESET}"
+				return 0
+			fi
+		fi
+	fi
+	
+	# 如果没有外部脚本，使用内置检测
+	local device_code=$(get_device_code)
+	if [ -z "$device_code" ]; then
+		echo -e "${YELLOW}⚠ 无法获取设备标识，跳过检测${RESET}"
+		return 0
+	fi
+	
+	if check_device_status "$device_code"; then
+		echo -e "${GREEN}✓ 设备状态正常${RESET}"
+		return 0
+	else
+		local status_rc=$?
+		if [ "$status_rc" -eq 2 ]; then
+			echo -e "${RED}✗ 设备已被禁用，无法继续运行${RESET}"
+			echo -e "${YELLOW}按任意键关闭窗口...${RESET}"
+			read -n 1 -s
+			exit 2
+		else
+			echo -e "${YELLOW}⚠ 设备状态检查失败，但继续运行${RESET}"
+			return 0
+		fi
+	fi
+}
+
 # 切换到脚本所在目录
 cd "$(dirname "$0")" || exit 1
 
@@ -698,6 +1021,9 @@ echo -e "${GREEN}═════════════════════
 echo -e "${GREEN}  Tashi DePIN Worker 重启脚本${RESET}"
 echo -e "${GREEN}═══════════════════════════════════════════════════════════════${RESET}"
 echo ""
+
+# 执行设备检测（如果被禁用则停止运行）
+perform_device_check
 
 # 停止现有容器
 echo "正在停止现有容器..."
