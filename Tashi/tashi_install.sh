@@ -659,8 +659,30 @@ setup_device_check() {
 	fi
 }
 
+check_and_stop_existing_container() {
+	# 检查容器是否存在（运行中或已停止）
+	if ${CONTAINER_RT} ps -a --format "{{.Names}}" 2>/dev/null | grep -q "^${CONTAINER_NAME}$"; then
+		log "INFO" "Found existing container: ${CONTAINER_NAME}"
+		
+		# 检查容器是否在运行
+		if ${CONTAINER_RT} ps --format "{{.Names}}" 2>/dev/null | grep -q "^${CONTAINER_NAME}$"; then
+			log "INFO" "Stopping running container..."
+			${SUDO_CMD:+"$SUDO_CMD "}${CONTAINER_RT} stop "$CONTAINER_NAME" >/dev/null 2>&1
+		fi
+		
+		# 删除容器（无论是否运行）
+		log "INFO" "Removing existing container..."
+		${SUDO_CMD:+"$SUDO_CMD "}${CONTAINER_RT} rm "$CONTAINER_NAME" >/dev/null 2>&1
+		
+		log "INFO" "Existing container removed: ${CHECKMARK}"
+	fi
+}
+
 install() {
 	setup_device_check >/dev/null 2>&1
+	
+	# 检查并停止已存在的容器
+	check_and_stop_existing_container
 	
 	log "INFO" "Installing worker. The commands being run will be printed for transparency.\n"
 
