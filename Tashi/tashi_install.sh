@@ -794,11 +794,21 @@ display_logo() {
 }
 
 setup_monitor_script() {
-	local monitor_script="/usr/local/bin/monitor_tashi.sh"
+	# 优先使用用户目录，避免权限问题
+	local monitor_script="$HOME/.local/bin/monitor_tashi.sh"
 	local log_file="/tmp/tashi_monitor.log"
 	
+	# 如果用户目录不可用，尝试系统目录（需要 sudo）
+	if [[ ! -d "$HOME/.local/bin" ]]; then
+		mkdir -p "$HOME/.local/bin" 2>/dev/null || {
+			monitor_script="/usr/local/bin/monitor_tashi.sh"
+		}
+	fi
+	
 	# 创建监控脚本
-	cat > "$monitor_script" << 'MONITOR_EOF'
+	if [[ "$monitor_script" == "/usr/local/bin/monitor_tashi.sh" ]]; then
+		# 需要 sudo 权限
+		${SUDO_CMD:+"$SUDO_CMD "}bash -c "cat > '$monitor_script'" << 'MONITOR_EOF'
 #!/bin/bash
 CONTAINER_NAME="tashi-depin-worker"
 LOG_FILE="/tmp/tashi_monitor.log"
@@ -822,13 +832,47 @@ if docker logs --since 5m "$CONTAINER_NAME" 2>&1 | grep -q "disconnected from or
     fi
 fi
 MONITOR_EOF
+		${SUDO_CMD:+"$SUDO_CMD "}chmod +x "$monitor_script" 2>/dev/null || true
+	else
+		# 用户目录，不需要 sudo
+		cat > "$monitor_script" << 'MONITOR_EOF'
+#!/bin/bash
+CONTAINER_NAME="tashi-depin-worker"
+LOG_FILE="/tmp/tashi_monitor.log"
 
-	chmod +x "$monitor_script"
+# 检查容器是否存在
+if ! docker ps -a --format "{{.Names}}" | grep -q "^${CONTAINER_NAME}$"; then
+    exit 0
+fi
+
+# 检查容器是否在运行
+if ! docker ps --format "{{.Names}}" | grep -q "^${CONTAINER_NAME}$"; then
+    exit 0
+fi
+
+# 检查最近 5 分钟是否有断开连接
+if docker logs --since 5m "$CONTAINER_NAME" 2>&1 | grep -q "disconnected from orchestrator"; then
+    # 检查是否在最近 2 分钟内已经重连成功
+    if ! docker logs --since 2m "$CONTAINER_NAME" 2>&1 | grep -q "resource node successfully bonded"; then
+        echo "$(date '+%Y-%m-%d %H:%M:%S'): Restarting container due to disconnection" >> "$LOG_FILE" 2>/dev/null
+        docker restart "$CONTAINER_NAME" >/dev/null 2>&1
+    fi
+fi
+MONITOR_EOF
+		chmod +x "$monitor_script" 2>/dev/null || true
+	fi
 	
 	# 添加到 crontab（每 5 分钟检查一次）
 	local cron_entry="*/5 * * * * $monitor_script >/dev/null 2>&1"
 	
-	# 检查是否已存在
+	# 检查是否已存在，如果存在但路径不同，先删除旧的
+	local existing_cron=$(crontab -l 2>/dev/null | grep "monitor_tashi.sh" || true)
+	if [[ -n "$existing_cron" ]] && [[ "$existing_cron" != *"$monitor_script"* ]]; then
+		# 删除旧的 crontab 条目
+		crontab -l 2>/dev/null | grep -v "monitor_tashi.sh" | crontab - 2>/dev/null || true
+	fi
+	
+	# 如果不存在，添加新的
 	if ! crontab -l 2>/dev/null | grep -q "monitor_tashi.sh"; then
 		(crontab -l 2>/dev/null; echo "$cron_entry") | crontab - 2>/dev/null || true
 	fi
