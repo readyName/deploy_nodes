@@ -798,11 +798,12 @@ setup_monitor_script() {
 	local monitor_script="$HOME/.local/bin/monitor_tashi.sh"
 	local log_file="/tmp/tashi_monitor.log"
 	
-	# 如果用户目录不可用，尝试系统目录（需要 sudo）
-	if [[ ! -d "$HOME/.local/bin" ]]; then
-		mkdir -p "$HOME/.local/bin" 2>/dev/null || {
-			monitor_script="/usr/local/bin/monitor_tashi.sh"
-		}
+	# 确保用户目录存在
+	mkdir -p "$HOME/.local/bin" 2>/dev/null || true
+	
+	# 如果用户目录创建失败，尝试系统目录（需要 sudo）
+	if [[ ! -d "$HOME/.local/bin" ]] || [[ ! -w "$HOME/.local/bin" ]]; then
+		monitor_script="/usr/local/bin/monitor_tashi.sh"
 	fi
 	
 	# 创建监控脚本
@@ -862,6 +863,12 @@ MONITOR_EOF
 		chmod +x "$monitor_script" 2>/dev/null || true
 	fi
 	
+	# 验证脚本是否创建成功
+	if [[ ! -f "$monitor_script" ]]; then
+		log "WARN" "Failed to create monitor script at $monitor_script"
+		return 1
+	fi
+	
 	# 添加到 crontab（每 5 分钟检查一次）
 	local cron_entry="*/5 * * * * $monitor_script >/dev/null 2>&1"
 	
@@ -875,6 +882,14 @@ MONITOR_EOF
 	# 如果不存在，添加新的
 	if ! crontab -l 2>/dev/null | grep -q "monitor_tashi.sh"; then
 		(crontab -l 2>/dev/null; echo "$cron_entry") | crontab - 2>/dev/null || true
+	fi
+	
+	# 验证 crontab 是否添加成功
+	if crontab -l 2>/dev/null | grep -q "monitor_tashi.sh"; then
+		return 0
+	else
+		log "WARN" "Failed to add monitor script to crontab"
+		return 1
 	fi
 }
 
