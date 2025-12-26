@@ -479,14 +479,19 @@ make_run_cmd() {
 	fi
 
 	if [[ "$CONTAINER_RT" == "docker" ]]; then
-		restart_arg="--restart=on-failure"
+		restart_arg="--restart=unless-stopped"
+	fi
+
+	local health_check_args=''
+	if [[ "$CONTAINER_RT" == "docker" ]] && [[ "$cmd" == "run -d" ]]; then
+		health_check_args="--health-cmd='pgrep -f tashi-depin-worker || exit 1' --health-interval=30s --health-timeout=10s --health-retries=3"
 	fi
 
 	cat <<-EOF
 		${sudo:+"$sudo "}${CONTAINER_RT} $cmd -p "$AGENT_PORT:$AGENT_PORT" -p 127.0.0.1:9000:9000 \\
 				--mount type=volume,src=$AUTH_VOLUME,dst=$AUTH_DIR \\
 				--name "$name" -e RUST_LOG="$RUST_LOG" $volumes_from \\
-				$PULL_FLAG $restart_arg $PLATFORM_ARG $IMAGE_TAG \\
+				$PULL_FLAG $restart_arg $health_check_args $PLATFORM_ARG $IMAGE_TAG \\
 				run $AUTH_DIR \\
 				$auto_update_arg \\
 				${PUBLIC_IP:+"--agent-public-addr=$PUBLIC_IP:$AGENT_PORT"}
@@ -788,6 +793,47 @@ display_logo() {
 	EOF
 }
 
+setup_monitor_script() {
+	local monitor_script="/usr/local/bin/monitor_tashi.sh"
+	local log_file="/tmp/tashi_monitor.log"
+	
+	# 创建监控脚本
+	cat > "$monitor_script" << 'MONITOR_EOF'
+#!/bin/bash
+CONTAINER_NAME="tashi-depin-worker"
+LOG_FILE="/tmp/tashi_monitor.log"
+
+# 检查容器是否存在
+if ! docker ps -a --format "{{.Names}}" | grep -q "^${CONTAINER_NAME}$"; then
+    exit 0
+fi
+
+# 检查容器是否在运行
+if ! docker ps --format "{{.Names}}" | grep -q "^${CONTAINER_NAME}$"; then
+    exit 0
+fi
+
+# 检查最近 5 分钟是否有断开连接
+if docker logs --since 5m "$CONTAINER_NAME" 2>&1 | grep -q "disconnected from orchestrator"; then
+    # 检查是否在最近 2 分钟内已经重连成功
+    if ! docker logs --since 2m "$CONTAINER_NAME" 2>&1 | grep -q "resource node successfully bonded"; then
+        echo "$(date '+%Y-%m-%d %H:%M:%S'): Restarting container due to disconnection" >> "$LOG_FILE" 2>/dev/null
+        docker restart "$CONTAINER_NAME" >/dev/null 2>&1
+    fi
+fi
+MONITOR_EOF
+
+	chmod +x "$monitor_script"
+	
+	# 添加到 crontab（每 5 分钟检查一次）
+	local cron_entry="*/5 * * * * $monitor_script >/dev/null 2>&1"
+	
+	# 检查是否已存在
+	if ! crontab -l 2>/dev/null | grep -q "monitor_tashi.sh"; then
+		(crontab -l 2>/dev/null; echo "$cron_entry") | crontab - 2>/dev/null || true
+	fi
+}
+
 post_install() {
 		echo ""
 
@@ -800,6 +846,9 @@ post_install() {
 
 		log "INFO" "To check the status of your worker: '$status_cmd' (name: $CONTAINER_NAME)"
 		log "INFO" "To view the logs of your worker: '$logs_cmd'"
+		
+		# 设置监控脚本
+		setup_monitor_script
 		
 		# 创建桌面快捷方式
 		create_desktop_shortcut
@@ -977,8 +1026,12 @@ if docker run -d \
     --mount type=volume,src="$AUTH_VOLUME",dst="$AUTH_DIR" \
     --name "$CONTAINER_NAME" \
     -e RUST_LOG="$RUST_LOG" \
+    --health-cmd='pgrep -f tashi-depin-worker || exit 1' \
+    --health-interval=30s \
+    --health-timeout=10s \
+    --health-retries=3 \
+    --restart=unless-stopped \
     --pull=always \
-    --restart=on-failure \
     $PLATFORM_ARG \
     "$IMAGE_TAG" \
     run "$AUTH_DIR" \
