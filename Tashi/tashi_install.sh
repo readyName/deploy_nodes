@@ -1266,6 +1266,11 @@ SCRIPT_EOF
 # Detect OS before running checks
 detect_os
 
+# Check Docker first (required for installation)
+# This must be done before any other checks since Docker is essential
+log "INFO" "Checking Docker installation and runtime..."
+check_container_runtime
+
 # Run all checks
 display_logo
 
@@ -1277,7 +1282,6 @@ check_platform
 check_cpu
 check_memory
 check_disk
-check_container_runtime
 check_root_required
 check_internet
 
