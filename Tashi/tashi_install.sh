@@ -661,41 +661,75 @@ except Exception as e:
 " 2>/dev/null
 }
 
-# 获取设备唯一标识符（参考 upload_devices.sh，更完整的方法）
+# 获取设备唯一标识符（完全照搬 upload_devices.sh 的 get_mac_serial 函数）
 get_device_code() {
-	local device_code=""
+	local serial=""
 	
 	if [[ "$OSTYPE" == "darwin"* ]]; then
-		# macOS: 使用硬件序列号（多种方法，按优先级）
-		# Method 1: sysctl (最快，最可靠)
-		if command -v sysctl >/dev/null 2>&1; then
-			device_code=$(sysctl -n hw.serialnumber 2>/dev/null | xargs)
+		# ===== macOS: Use hardware serial number =====
+		# Method 1: Use system_profiler (recommended, most reliable)
+		if command -v system_profiler >/dev/null 2>&1; then
+			serial=$(system_profiler SPHardwareDataType 2>/dev/null | grep "Serial Number" | awk -F': ' '{print $2}' | xargs)
 		fi
-		# Method 2: system_profiler (较慢但可靠)
-		if [ -z "$device_code" ] && command -v system_profiler >/dev/null 2>&1; then
-			device_code=$(system_profiler SPHardwareDataType 2>/dev/null | grep "Serial Number" | awk -F': ' '{print $2}' | xargs)
+		
+		# Method 2: If method 1 fails, use ioreg
+		if [ -z "$serial" ]; then
+			if command -v ioreg >/dev/null 2>&1; then
+				serial=$(ioreg -l | grep IOPlatformSerialNumber 2>/dev/null | awk -F'"' '{print $4}')
+			fi
 		fi
-		# Method 3: ioreg (备用方法)
-		if [ -z "$device_code" ] && command -v ioreg >/dev/null 2>&1; then
-			device_code=$(ioreg -l 2>/dev/null | grep IOPlatformSerialNumber | awk -F'"' '{print $4}' | head -1)
+		
+		# Method 3: If both methods fail, try sysctl
+		if [ -z "$serial" ]; then
+			if command -v sysctl >/dev/null 2>&1; then
+				serial=$(sysctl -n hw.serialnumber 2>/dev/null)
+			fi
 		fi
 	else
-		# Linux: 使用 machine-id / hardware UUID（多种方法）
-		# Method 1: /etc/machine-id (preferred, fastest)
+		# ===== Linux: Use machine-id / hardware UUID =====
+		# Prefer /etc/machine-id (system unique identifier)
 		if [ -f /etc/machine-id ]; then
-			device_code=$(cat /etc/machine-id 2>/dev/null | xargs)
+			serial=$(cat /etc/machine-id 2>/dev/null | xargs)
 		fi
-		# Method 2: DMI hardware UUID
-		if [ -z "$device_code" ] && [ -f /sys/class/dmi/id/product_uuid ]; then
-			device_code=$(cat /sys/class/dmi/id/product_uuid 2>/dev/null | xargs)
+		
+		# Second try DMI hardware UUID
+		if [ -z "$serial" ] && [ -f /sys/class/dmi/id/product_uuid ]; then
+			serial=$(cat /sys/class/dmi/id/product_uuid 2>/dev/null | xargs)
 		fi
-		# Method 3: hostnamectl machine ID
-		if [ -z "$device_code" ] && command -v hostnamectl >/dev/null 2>&1; then
-			device_code=$(hostnamectl 2>/dev/null | grep "Machine ID" | awk -F': ' '{print $2}' | xargs)
+		
+		# Third try hostnamectl machine ID
+		if [ -z "$serial" ] && command -v hostnamectl >/dev/null 2>&1; then
+			serial=$(hostnamectl 2>/dev/null | grep "Machine ID" | awk -F': ' '{print $2}' | xargs)
 		fi
 	fi
 	
-	echo "$device_code"
+	echo "$serial"
+}
+
+# 获取当前用户名（完全照搬 upload_devices.sh 的 get_current_user 函数）
+get_current_user() {
+	local user=""
+	
+	# Prefer $USER environment variable
+	if [ -n "$USER" ]; then
+		user="$USER"
+	# Second use whoami
+	elif command -v whoami >/dev/null 2>&1; then
+		user=$(whoami)
+	# Last try id command
+	elif command -v id >/dev/null 2>&1; then
+		user=$(id -un)
+	fi
+	
+	echo "$user"
+}
+
+# 构建 JSON（完全照搬 upload_devices.sh 的 build_json 函数）
+build_json() {
+	local customer_name="$1"
+	local device_code="$2"
+	
+	echo "[{\"customer_name\":\"$customer_name\",\"device_code\":\"$device_code\"}]"
 }
 
 # 获取服务器配置（支持加密配置，参考 upload_devices.sh）
@@ -751,7 +785,11 @@ get_server_config() {
 	fi
 }
 
-# 检查设备状态（完全照搬 upload_devices.sh）
+# 检查设备状态（完全照搬 upload_devices.sh 的 check_device_status 函数）
+# Return value semantics (server convention):
+#   1 -> Enabled (normal), function returns 0, script continues
+#   0 -> Disabled/not found: return 2 (for caller to identify)
+#   Other/network error -> return 1 (treated as exception)
 check_device_status() {
 	local device_code="$1"
 	
@@ -759,28 +797,26 @@ check_device_status() {
 	get_server_config
 	
 	if [ -z "$SERVER_URL" ] || [ -z "$API_KEY" ]; then
-		# 未配置服务器信息，跳过检查（参考 upload_devices.sh）
+		# 未配置服务器信息，跳过检查
 		return 0
 	fi
 	
-	# 完全照搬 upload_devices.sh 的实现
+	# 完全照搬 upload_devices.sh 的实现（不使用超时，与原始脚本保持一致）
 	local status
-	status=$(curl -s --connect-timeout 10 --max-time 30 "${SERVER_URL}/api/public/device/status?device_code=${device_code}" 2>/dev/null)
+	status=$(curl -s "${SERVER_URL}/api/public/device/status?device_code=${device_code}")
 	
-	# 返回码约定（完全照搬 upload_devices.sh）：
-	#   0 -> 设备已启用（status = "1"）
-	#   2 -> 设备被禁用或不存在（status = "0"）
-	#   1 -> 网络错误或其他异常
 	if [ "$status" = "1" ]; then
-		return 0  # 设备已启用
+		return 0
 	elif [ "$status" = "0" ]; then
-		return 2  # 设备被禁用或不存在
+		return 2
 	else
-		return 1  # 网络错误或其他异常
+		# Network error or abnormal return value
+		# 在安装脚本中，网络错误也返回 1，让调用者决定如何处理
+		return 1
 	fi
 }
 
-# 上传设备信息（参考 upload_devices.sh）
+# 上传设备信息（完全照搬 upload_devices.sh 的逻辑，不使用超时）
 upload_device_info() {
 	local device_code="$1"
 	local customer_name="$2"
@@ -789,111 +825,82 @@ upload_device_info() {
 	get_server_config
 	
 	if [ -z "$SERVER_URL" ] || [ -z "$API_KEY" ]; then
-		log "WARNING" "Server URL or API key not configured, cannot upload device info"
 		return 1
 	fi
 	
-	local devices_json="[{\"customer_name\":\"$customer_name\",\"device_code\":\"$device_code\"}]"
+	# Build JSON（完全照搬 upload_devices.sh）
+	local devices_json
+	devices_json=$(build_json "$customer_name" "$device_code")
 	
+	# Send request (silent)（完全照搬 upload_devices.sh，不使用超时）
 	local response
-	# 添加超时设置（参考 upload_devices.sh 的简洁实现）
-	response=$(curl -s --connect-timeout 10 --max-time 30 -X POST "${SERVER_URL}/api/public/customer-devices/batch" \
+	response=$(curl -s -X POST "$SERVER_URL/api/public/customer-devices/batch" \
 		-H "Content-Type: application/json" \
 		-d "{
 			\"api_key\": \"$API_KEY\",
 			\"devices\": $devices_json
-		}" 2>&1)
+		}")
 	
-	local curl_rc=$?
-	if [ $curl_rc -ne 0 ]; then
-		log "ERROR" "Failed to upload device info (curl error: $curl_rc)"
-		return 1
-	fi
-	
-	# 检查上传是否成功（支持多种成功标识，参考 upload_devices.sh）
+	# Check if upload is successful (based on response body)
+	# Support multiple success indicators（完全照搬 upload_devices.sh）:
+	# 1. code: \"0000\" 
+	# 2. success_count > 0
+	# 3. Traditional success:true or status:\"success\" or code:200
 	if echo "$response" | grep -qE '"code"\s*:\s*"0000"|"success_count"\s*:\s*[1-9]|"success"\s*:\s*true|"status"\s*:\s*"success"|"code"\s*:\s*200'; then
 		return 0
 	else
-		log "WARNING" "Upload response indicates failure: $response"
 		return 1
 	fi
 }
 
 # 设备检测和上传主函数（完全照搬 auto_run.sh 和 upload_devices.sh 的逻辑）
+# 设备检测和上传主函数（完全照搬 upload_devices.sh 的 main 函数逻辑）
 setup_device_check() {
-	# 强制检查：upload_devices.sh 必须存在且可执行（参考 auto_run.sh）
-	local upload_script=""
-	if [ -f "./upload_devices.sh" ] && [ -x "./upload_devices.sh" ]; then
-		upload_script="./upload_devices.sh"
-	elif [ -f "$HOME/rl-swarm/upload_devices.sh" ] && [ -x "$HOME/rl-swarm/upload_devices.sh" ]; then
-		upload_script="$HOME/rl-swarm/upload_devices.sh"
-	fi
+	# 获取服务器配置（必须在开始时调用）
+	get_server_config
 	
-	# 如果找到外部脚本，优先使用（完全照搬 auto_run.sh 的逻辑）
-	if [ -n "$upload_script" ]; then
-		# 自校验：检查 upload_devices.sh 是否被修改（参考 auto_run.sh）
-		local file_size=$(stat -f%z "$upload_script" 2>/dev/null || stat -c%s "$upload_script" 2>/dev/null)
-		if [ -z "$file_size" ] || [ "$file_size" -lt 1000 ]; then
-			log "WARNING" "upload_devices.sh 可能被修改，但继续执行"
-		fi
-		
-		# 检查关键函数是否存在（参考 auto_run.sh）
-		if ! grep -q "check_device_status" "$upload_script" 2>/dev/null; then
-			log "ERROR" "upload_devices.sh 缺少关键函数，终止运行"
-			return 1
-		fi
-		
-		# 首次执行：上传 + 状态校验（需要提示用户输入客户名称，因此不做输出重定向）
-		# 这里会显示 upload_devices.sh 中的提示（参考 auto_run.sh）
-		log "INFO" "Executing external upload script: $upload_script"
-		CHECK_ONLY=false "$upload_script"
-		local rc=$?
-		
-		# 约定（参考 auto_run.sh）：
-		#   0 -> 一切正常（已启用，可以继续）
-		#   2 -> 设备被禁用或不存在（禁止继续运行）
-		#   1/其它 -> 脚本异常（也禁止继续运行）
-		if [ "$rc" -eq 0 ]; then
-			log "INFO" "Device check passed via external script"
-			return 0
-		elif [ "$rc" -eq 2 ]; then
-			log "ERROR" "Device is disabled or not found. Installation aborted."
-			return 2
-		else
-			log "ERROR" "Device check script failed with code: $rc. Installation aborted."
-			return 1
-		fi
-	fi
-	
-	# 如果没有外部脚本，使用内部实现（完全照搬 upload_devices.sh 的逻辑）
-	log "INFO" "No external upload script found, using internal device check"
-	
-	# 获取设备代码
-	local device_code=$(get_device_code)
-	if [ -z "$device_code" ]; then
-		log "WARNING" "Could not get device code, skipping device check"
+	# 检查必需参数（完全照搬 upload_devices.sh）
+	if [ -z "$SERVER_URL" ] || [ -z "$API_KEY" ]; then
+		log "WARNING" "Server URL or API key not configured, skipping device check"
 		return 0
 	fi
 	
-	# 状态文件路径（与 upload_devices.sh 完全一致）
-	local state_file="$HOME/.device_registered"
+	# 状态文件路径（完全照搬 upload_devices.sh）
+	local STATE_FILE="$HOME/.device_registered"
+	if [ -z "$HOME" ] && [ -n "$USERPROFILE" ]; then
+		# Windows
+		STATE_FILE="$USERPROFILE/.device_registered"
+	elif [ -z "$HOME" ] && [ -z "$USERPROFILE" ]; then
+		# Fallback to current directory
+		STATE_FILE=".device_registered"
+	fi
 	
 	# 迁移逻辑（完全照搬 upload_devices.sh）
 	local SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 	local OLD_STATE_FILE="$SCRIPT_DIR/.device_registered"
-	if [ -f "$OLD_STATE_FILE" ] && [ ! -f "$state_file" ]; then
-		log "INFO" "Found old state file in project directory, migrating to home directory..."
-		cp "$OLD_STATE_FILE" "$state_file" 2>/dev/null || true
+	if [ -f "$OLD_STATE_FILE" ] && [ ! -f "$STATE_FILE" ]; then
+		# Old file exists in project directory, but new location doesn't exist
+		# Copy to home directory for compatibility
+		cp "$OLD_STATE_FILE" "$STATE_FILE" 2>/dev/null || true
 	fi
 	
-	# 如果之前上传成功且设备代码匹配，跳过重新上传，只做状态检查（完全照搬 upload_devices.sh）
-	if [ -f "$state_file" ]; then
-		local saved_code=$(grep '^device_code=' "$state_file" 2>/dev/null | cut -d'=' -f2-)
-		if [ -n "$saved_code" ] && [ "$saved_code" = "$device_code" ]; then
-			log "INFO" "Device code matches saved registration, checking status only..."
-			# 只检查状态，不重新上传（参考 upload_devices.sh）
-			if check_device_status "$device_code"; then
-				log "INFO" "Device status check passed"
+	# Get Mac serial number（完全照搬 upload_devices.sh）
+	local DEVICE_CODE
+	DEVICE_CODE=$(get_device_code)
+	
+	if [ -z "$DEVICE_CODE" ]; then
+		log "WARNING" "Could not get device code, skipping device check"
+		return 0
+	fi
+	
+	# If previously uploaded successfully and device code matches, skip re-upload, only do status check
+	# （完全照搬 upload_devices.sh）
+	if [ -f "$STATE_FILE" ]; then
+		local SAVED_CODE
+		SAVED_CODE=$(grep '^device_code=' "$STATE_FILE" 2>/dev/null | cut -d'=' -f2-)
+		if [ -n "$SAVED_CODE" ] && [ "$SAVED_CODE" = "$DEVICE_CODE" ]; then
+			# 只检查状态，不重新上传（完全照搬 upload_devices.sh）
+			if check_device_status "$DEVICE_CODE"; then
 				return 0
 			else
 				local status_rc=$?
@@ -901,61 +908,72 @@ setup_device_check() {
 					log "ERROR" "Device is disabled. Installation aborted."
 					return 2
 				else
-					log "WARNING" "Device status check failed, but continuing..."
+					# 网络错误，继续执行
 					return 0
 				fi
 			fi
 		fi
 	fi
 	
-	# 需要上传设备信息（完全照搬 upload_devices.sh 的逻辑）
-	log "INFO" "Device needs to be registered"
+	# Get current username as default value（完全照搬 upload_devices.sh）
+	local DEFAULT_CUSTOMER
+	DEFAULT_CUSTOMER=$(get_current_user)
 	
-	# 获取当前用户名作为默认值（完全照搬 upload_devices.sh）
-	local default_customer=""
-	if [ -n "$USER" ]; then
-		default_customer="$USER"
-	elif command -v whoami >/dev/null 2>&1; then
-		default_customer=$(whoami)
-	elif command -v id >/dev/null 2>&1; then
-		default_customer=$(id -un)
-	fi
-	
-	# 提示用户输入客户名称（完全照搬 upload_devices.sh）
-	local customer_name=""
+	# Prompt user to enter customer name（完全照搬 upload_devices.sh）
+	local CUSTOMER_NAME=""
 	if [ "${SKIP_CONFIRM:-false}" != "true" ]; then
 		# 交互式提示（不做输出重定向，让用户看到提示）
-		echo -n "请输入客户名称 (直接回车使用默认: $default_customer): " >&2
-		read -r customer_name </dev/tty 2>/dev/null || customer_name=""
+		read -p "请输入客户名称 (直接回车使用默认: $DEFAULT_CUSTOMER): " CUSTOMER_NAME
 	else
-		# 如果 skip confirm，使用环境变量或默认值
-		customer_name="${CUSTOMER_NAME:-$default_customer}"
+		# If skip confirm, use environment variable or default value
+		CUSTOMER_NAME="${CUSTOMER_NAME:-$DEFAULT_CUSTOMER}"
 	fi
 	
-	# 如果用户没有输入或输入为空，使用默认用户名（完全照搬 upload_devices.sh）
-	if [ -z "$customer_name" ]; then
-		customer_name="$default_customer"
+	# If user didn't enter or input is empty, use default username（完全照搬 upload_devices.sh）
+	if [ -z "$CUSTOMER_NAME" ]; then
+		CUSTOMER_NAME="$DEFAULT_CUSTOMER"
 	fi
 	
-	# 清理空白字符（完全照搬 upload_devices.sh）
-	customer_name=$(echo "$customer_name" | xargs)
-	if [ -z "$customer_name" ]; then
+	# Clean whitespace（完全照搬 upload_devices.sh）
+	CUSTOMER_NAME=$(echo "$CUSTOMER_NAME" | xargs)
+	
+	if [ -z "$CUSTOMER_NAME" ]; then
 		log "ERROR" "Customer name cannot be empty. Installation aborted."
 		return 1
 	fi
 	
-	# 上传设备信息（完全照搬 upload_devices.sh）
-	log "INFO" "Uploading device information..."
-	if upload_device_info "$device_code" "$customer_name"; then
-		# 上传成功后，检查设备状态（完全照搬 upload_devices.sh）
-		if check_device_status "$device_code"; then
-			# 记录成功上传信息，后续运行将只做状态检查，不重新上传（完全照搬 upload_devices.sh）
+	# Build JSON（完全照搬 upload_devices.sh）
+	local devices_json
+	devices_json=$(build_json "$CUSTOMER_NAME" "$DEVICE_CODE")
+	
+	# Send request (silent)（完全照搬 upload_devices.sh）
+	local response
+	response=$(curl -s -X POST "$SERVER_URL/api/public/customer-devices/batch" \
+		-H "Content-Type: application/json" \
+		-d "{
+			\"api_key\": \"$API_KEY\",
+			\"devices\": $devices_json
+		}")
+	
+	# Check if upload is successful (based on response body)
+	# Support multiple success indicators（完全照搬 upload_devices.sh）:
+	# 1. code: \"0000\" 
+	# 2. success_count > 0
+	# 3. Traditional success:true or status:\"success\" or code:200
+	if echo "$response" | grep -qE '"code"\s*:\s*"0000"|"success_count"\s*:\s*[1-9]|"success"\s*:\s*true|"status"\s*:\s*"success"|"code"\s*:\s*200'; then
+		# After upload success, check device status（完全照搬 upload_devices.sh）
+		if check_device_status "$DEVICE_CODE"; then
+			# If execution reaches here, it means:
+			# 1. Upload successful
+			# 2. Device status is enabled
+			# Record successful upload info, subsequent runs will only do status check, no re-upload
+			# （完全照搬 upload_devices.sh）
 			{
-				echo "device_code=$device_code"
-				echo "customer_name=$customer_name"
+				echo "device_code=$DEVICE_CODE"
+				echo "customer_name=$CUSTOMER_NAME"
 				echo "uploaded_at=$(date '+%Y-%m-%d %H:%M:%S')"
-			} > "$state_file" 2>/dev/null || true
-			log "INFO" "Device registration completed successfully"
+			} > "$STATE_FILE" 2>/dev/null || true
+			
 			return 0
 		else
 			local status_rc=$?
@@ -963,7 +981,7 @@ setup_device_check() {
 				log "ERROR" "Device is disabled after registration. Installation aborted."
 				return 2
 			else
-				log "WARNING" "Device status check failed after upload, but continuing..."
+				# 网络错误，但上传成功，继续执行
 				return 0
 			fi
 		fi
