@@ -819,23 +819,52 @@ setup_device_check() {
 		return 0
 	fi
 	
-	# 检查设备状态
-	local state_file="$HOME/.tashi_device_registered"
-	if [ -f "$state_file" ]; then
-		local saved_code=$(grep '^device_code=' "$state_file" 2>/dev/null | cut -d'=' -f2-)
+	# 状态文件路径（与 upload_devices.sh 保持一致）
+	local state_file="$HOME/.device_registered"
+	local old_state_file="$HOME/.tashi_device_registered"
+	
+	# 迁移逻辑：如果存在旧的状态文件，复制到新位置（参考 upload_devices.sh）
+	if [ -f "$old_state_file" ] && [ ! -f "$state_file" ]; then
+		log "INFO" "Found old state file, migrating to new location..."
+		cp "$old_state_file" "$state_file" 2>/dev/null || true
+	fi
+	
+	# 检查设备状态（优先检查新文件，如果不存在再检查旧文件）
+	local check_file="$state_file"
+	if [ ! -f "$check_file" ] && [ -f "$old_state_file" ]; then
+		check_file="$old_state_file"
+	fi
+	
+	if [ -f "$check_file" ]; then
+		log "INFO" "Found existing device registration file: $check_file"
+		local saved_code=$(grep '^device_code=' "$check_file" 2>/dev/null | cut -d'=' -f2-)
 		if [ -n "$saved_code" ] && [ "$saved_code" = "$device_code" ]; then
+			log "INFO" "Device code matches saved registration, checking status..."
 			if check_device_status "$device_code"; then
+				log "INFO" "Device status check passed, skipping registration"
+				# 如果使用的是旧文件，迁移到新文件
+				if [ "$check_file" = "$old_state_file" ]; then
+					cp "$old_state_file" "$state_file" 2>/dev/null || true
+				fi
 				return 0
 			else
 				local status_rc=$?
+				log "WARNING" "Device status check returned code: $status_rc"
 				if [ "$status_rc" -eq 2 ]; then
 					log "ERROR" "Device is disabled. Installation aborted."
 					return 2
 				else
+					log "INFO" "Device status check failed but continuing..."
 					return 0
 				fi
 			fi
+		else
+			log "INFO" "Device code does not match saved registration, will register new device"
 		fi
+	else
+		log "INFO" "No existing device registration found, will register new device"
+		echo ""
+		log "INFO" "This device needs to be registered before installation can proceed."
 	fi
 	
 	# 获取当前用户名作为默认值（参考 upload_devices.sh）
@@ -852,14 +881,17 @@ setup_device_check() {
 	if [ "${SKIP_CONFIRM:-false}" = "true" ]; then
 		# 跳过确认，使用环境变量或默认值
 		customer_name="${CUSTOMER_NAME:-$default_customer}"
+		log "INFO" "Using customer name from environment or default: $customer_name"
 	else
 		# 交互式提示
 		if [ -t 0 ] && [ -t 1 ]; then
 			# 交互式环境，从终端读取
+			echo ""
 			echo -n "请输入客户名称 (直接回车使用默认: $default_customer): " >&2
 			read -r customer_name </dev/tty 2>/dev/null || customer_name=""
 		else
 			# 非交互式环境，使用默认值
+			log "INFO" "Non-interactive mode, using default customer name: $default_customer"
 			customer_name=""
 		fi
 	fi
