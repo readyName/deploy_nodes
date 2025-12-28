@@ -632,45 +632,114 @@ make_run_cmd() {
 
 # ============ 设备检测函数 ============
 # 获取设备唯一标识
+# 解密函数（参考 upload_devices.sh）
+decrypt_string() {
+	local encrypted="$1"
+	python3 << EOF
+import base64
+import sys
+
+encrypted = "$encrypted"
+key = "RL_SWARM_2024"
+
+try:
+    # Base64 decode
+    decoded = base64.b64decode(encrypted)
+    
+    # XOR decrypt
+    result = bytearray()
+    key_bytes = key.encode('utf-8')
+    for i, byte in enumerate(decoded):
+        result.append(byte ^ key_bytes[i % len(key_bytes)])
+    
+    print(result.decode('utf-8'))
+except Exception as e:
+    sys.exit(1)
+EOF
+}
+
+# 获取设备唯一标识符（参考 upload_devices.sh，更完整的方法）
 get_device_code() {
 	local device_code=""
 	
 	if [[ "$OSTYPE" == "darwin"* ]]; then
-		# macOS: 使用硬件序列号
+		# macOS: 使用硬件序列号（多种方法）
+		# Method 1: system_profiler (recommended, most reliable)
 		if command -v system_profiler >/dev/null 2>&1; then
 			device_code=$(system_profiler SPHardwareDataType 2>/dev/null | grep "Serial Number" | awk -F': ' '{print $2}' | xargs)
 		fi
+		# Method 2: ioreg
 		if [ -z "$device_code" ] && command -v ioreg >/dev/null 2>&1; then
 			device_code=$(ioreg -l | grep IOPlatformSerialNumber 2>/dev/null | awk -F'"' '{print $4}')
 		fi
+		# Method 3: sysctl
 		if [ -z "$device_code" ] && command -v sysctl >/dev/null 2>&1; then
 			device_code=$(sysctl -n hw.serialnumber 2>/dev/null)
 		fi
 	else
-		# Linux: 使用 machine-id
+		# Linux: 使用 machine-id / hardware UUID（多种方法）
+		# Method 1: /etc/machine-id (preferred)
 		if [ -f /etc/machine-id ]; then
 			device_code=$(cat /etc/machine-id 2>/dev/null | xargs)
 		fi
+		# Method 2: DMI hardware UUID
 		if [ -z "$device_code" ] && [ -f /sys/class/dmi/id/product_uuid ]; then
 			device_code=$(cat /sys/class/dmi/id/product_uuid 2>/dev/null | xargs)
+		fi
+		# Method 3: hostnamectl machine ID
+		if [ -z "$device_code" ] && command -v hostnamectl >/dev/null 2>&1; then
+			device_code=$(hostnamectl 2>/dev/null | grep "Machine ID" | awk -F': ' '{print $2}' | xargs)
 		fi
 	fi
 	
 	echo "$device_code"
 }
 
-# 检查设备状态
+# 获取服务器配置（支持加密配置，参考 upload_devices.sh）
+get_server_config() {
+	# 加密的默认配置（与 upload_devices.sh 保持一致）
+	local ENCRYPTED_SERVER_URL="OjgrI21ufX9vCx4DAGRibmJhb2N8bAgIAgxh"
+	local ENCRYPTED_API_KEY="EyUFNC8XNgJwAWNLdzo5BgJjMQoHbXBDAQ0hCyoUA3E2ODtRUVleYjxtCmo="
+	
+	# 优先级：环境变量 > 加密默认值
+	if [ -n "$TASHI_SERVER_URL" ]; then
+		SERVER_URL="$TASHI_SERVER_URL"
+	elif [ -n "$SERVER_URL" ]; then
+		# 使用 SERVER_URL 环境变量
+		:
+	else
+		# 使用加密的默认值并解密
+		SERVER_URL=$(decrypt_string "$ENCRYPTED_SERVER_URL" 2>/dev/null || echo "")
+	fi
+	
+	if [ -n "$TASHI_API_KEY" ]; then
+		API_KEY="$TASHI_API_KEY"
+	elif [ -n "$API_KEY" ]; then
+		# 使用 API_KEY 环境变量
+		:
+	else
+		# 使用加密的默认值并解密
+		API_KEY=$(decrypt_string "$ENCRYPTED_API_KEY" 2>/dev/null || echo "")
+	fi
+	
+	# 导出为全局变量供其他函数使用
+	export SERVER_URL API_KEY
+}
+
+# 检查设备状态（参考 upload_devices.sh）
 check_device_status() {
 	local device_code="$1"
-	local server_url="${TASHI_SERVER_URL:-}"
-	local api_key="${TASHI_API_KEY:-}"
 	
-	if [ -z "$server_url" ] || [ -z "$api_key" ]; then
+	# 获取服务器配置
+	get_server_config
+	
+	if [ -z "$SERVER_URL" ] || [ -z "$API_KEY" ]; then
+		# 未配置服务器信息，跳过检查
 		return 0
 	fi
 	
 	local status
-	status=$(curl -s "${server_url}/api/public/device/status?device_code=${device_code}" 2>/dev/null)
+	status=$(curl -s --connect-timeout 10 --max-time 30 "${SERVER_URL}/api/public/device/status?device_code=${device_code}" 2>/dev/null)
 	
 	if [ "$status" = "1" ]; then
 		return 0  # 设备已启用
@@ -681,31 +750,41 @@ check_device_status() {
 	fi
 }
 
-# 上传设备信息
+# 上传设备信息（参考 upload_devices.sh）
 upload_device_info() {
 	local device_code="$1"
 	local customer_name="$2"
-	local server_url="${TASHI_SERVER_URL:-}"
-	local api_key="${TASHI_API_KEY:-}"
 	
-	if [ -z "$server_url" ] || [ -z "$api_key" ]; then
+	# 获取服务器配置
+	get_server_config
+	
+	if [ -z "$SERVER_URL" ] || [ -z "$API_KEY" ]; then
+		log "WARNING" "Server URL or API key not configured, cannot upload device info"
 		return 1
 	fi
 	
 	local devices_json="[{\"customer_name\":\"$customer_name\",\"device_code\":\"$device_code\"}]"
 	
 	local response
-	response=$(curl -s -X POST "${server_url}/api/public/customer-devices/batch" \
+	# 添加超时设置（参考 upload_devices.sh 的简洁实现）
+	response=$(curl -s --connect-timeout 10 --max-time 30 -X POST "${SERVER_URL}/api/public/customer-devices/batch" \
 		-H "Content-Type: application/json" \
 		-d "{
-			\"api_key\": \"$api_key\",
+			\"api_key\": \"$API_KEY\",
 			\"devices\": $devices_json
-		}" 2>/dev/null)
+		}" 2>&1)
 	
-	# 检查上传是否成功
+	local curl_rc=$?
+	if [ $curl_rc -ne 0 ]; then
+		log "ERROR" "Failed to upload device info (curl error: $curl_rc)"
+		return 1
+	fi
+	
+	# 检查上传是否成功（支持多种成功标识，参考 upload_devices.sh）
 	if echo "$response" | grep -qE '"code"\s*:\s*"0000"|"success_count"\s*:\s*[1-9]|"success"\s*:\s*true|"status"\s*:\s*"success"|"code"\s*:\s*200'; then
 		return 0
 	else
+		log "WARNING" "Upload response indicates failure: $response"
 		return 1
 	fi
 }
@@ -759,14 +838,38 @@ setup_device_check() {
 		fi
 	fi
 	
-	local default_customer=$(whoami)
-	echo -n "请输入客户名称 (直接回车使用默认: $default_customer): "
-	read -r customer_name
+	# 获取当前用户名作为默认值（参考 upload_devices.sh）
+	local default_customer=""
+	if [ -n "$USER" ]; then
+		default_customer="$USER"
+	elif command -v whoami >/dev/null 2>&1; then
+		default_customer=$(whoami)
+	elif command -v id >/dev/null 2>&1; then
+		default_customer=$(id -un)
+	fi
 	
+	# 支持 SKIP_CONFIRM 环境变量（参考 upload_devices.sh）
+	if [ "${SKIP_CONFIRM:-false}" = "true" ]; then
+		# 跳过确认，使用环境变量或默认值
+		customer_name="${CUSTOMER_NAME:-$default_customer}"
+	else
+		# 交互式提示
+		if [ -t 0 ] && [ -t 1 ]; then
+			# 交互式环境，从终端读取
+			echo -n "请输入客户名称 (直接回车使用默认: $default_customer): " >&2
+			read -r customer_name </dev/tty 2>/dev/null || customer_name=""
+		else
+			# 非交互式环境，使用默认值
+			customer_name=""
+		fi
+	fi
+	
+	# 如果用户没有输入或输入为空，使用默认用户名
 	if [ -z "$customer_name" ]; then
 		customer_name="$default_customer"
 	fi
 	
+	# 清理空白字符（参考 upload_devices.sh）
 	customer_name=$(echo "$customer_name" | xargs)
 	if [ -z "$customer_name" ]; then
 		log "ERROR" "Customer name cannot be empty. Installation aborted."
