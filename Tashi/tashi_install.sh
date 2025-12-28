@@ -635,27 +635,30 @@ make_run_cmd() {
 # 解密函数（参考 upload_devices.sh）
 decrypt_string() {
 	local encrypted="$1"
-	python3 << EOF
+	
+	# 检查 python3 是否可用
+	if ! command -v python3 >/dev/null 2>&1; then
+		return 1
+	fi
+	
+	# 使用 python3 解密（直接传递变量）
+	python3 -c "
 import base64
 import sys
 
-encrypted = "$encrypted"
-key = "RL_SWARM_2024"
+encrypted = '$encrypted'
+key = 'RL_SWARM_2024'
 
 try:
-    # Base64 decode
     decoded = base64.b64decode(encrypted)
-    
-    # XOR decrypt
     result = bytearray()
     key_bytes = key.encode('utf-8')
     for i, byte in enumerate(decoded):
         result.append(byte ^ key_bytes[i % len(key_bytes)])
-    
     print(result.decode('utf-8'))
 except Exception as e:
     sys.exit(1)
-EOF
+" 2>/dev/null
 }
 
 # 获取设备唯一标识符（参考 upload_devices.sh，更完整的方法）
@@ -663,22 +666,22 @@ get_device_code() {
 	local device_code=""
 	
 	if [[ "$OSTYPE" == "darwin"* ]]; then
-		# macOS: 使用硬件序列号（多种方法）
-		# Method 1: system_profiler (recommended, most reliable)
-		if command -v system_profiler >/dev/null 2>&1; then
+		# macOS: 使用硬件序列号（多种方法，按优先级）
+		# Method 1: sysctl (最快，最可靠)
+		if command -v sysctl >/dev/null 2>&1; then
+			device_code=$(sysctl -n hw.serialnumber 2>/dev/null | xargs)
+		fi
+		# Method 2: system_profiler (较慢但可靠)
+		if [ -z "$device_code" ] && command -v system_profiler >/dev/null 2>&1; then
 			device_code=$(system_profiler SPHardwareDataType 2>/dev/null | grep "Serial Number" | awk -F': ' '{print $2}' | xargs)
 		fi
-		# Method 2: ioreg
+		# Method 3: ioreg (备用方法)
 		if [ -z "$device_code" ] && command -v ioreg >/dev/null 2>&1; then
-			device_code=$(ioreg -l | grep IOPlatformSerialNumber 2>/dev/null | awk -F'"' '{print $4}')
-		fi
-		# Method 3: sysctl
-		if [ -z "$device_code" ] && command -v sysctl >/dev/null 2>&1; then
-			device_code=$(sysctl -n hw.serialnumber 2>/dev/null)
+			device_code=$(ioreg -l 2>/dev/null | grep IOPlatformSerialNumber | awk -F'"' '{print $4}' | head -1)
 		fi
 	else
 		# Linux: 使用 machine-id / hardware UUID（多种方法）
-		# Method 1: /etc/machine-id (preferred)
+		# Method 1: /etc/machine-id (preferred, fastest)
 		if [ -f /etc/machine-id ]; then
 			device_code=$(cat /etc/machine-id 2>/dev/null | xargs)
 		fi
@@ -704,26 +707,48 @@ get_server_config() {
 	# 优先级：环境变量 > 加密默认值
 	if [ -n "$TASHI_SERVER_URL" ]; then
 		SERVER_URL="$TASHI_SERVER_URL"
+		log "INFO" "Using SERVER_URL from TASHI_SERVER_URL environment variable"
 	elif [ -n "$SERVER_URL" ]; then
 		# 使用 SERVER_URL 环境变量
+		log "INFO" "Using SERVER_URL from SERVER_URL environment variable"
 		:
 	else
 		# 使用加密的默认值并解密
-		SERVER_URL=$(decrypt_string "$ENCRYPTED_SERVER_URL" 2>/dev/null || echo "")
+		log "INFO" "Decrypting SERVER_URL from encrypted default..."
+		if ! command -v python3 >/dev/null 2>&1; then
+			log "WARNING" "python3 not found, cannot decrypt default SERVER_URL"
+			SERVER_URL=""
+		else
+			# 使用 decrypt_string 函数（更可靠）
+			SERVER_URL=$(decrypt_string "$ENCRYPTED_SERVER_URL" 2>/dev/null || echo "")
+		fi
 	fi
 	
 	if [ -n "$TASHI_API_KEY" ]; then
 		API_KEY="$TASHI_API_KEY"
+		log "INFO" "Using API_KEY from TASHI_API_KEY environment variable"
 	elif [ -n "$API_KEY" ]; then
 		# 使用 API_KEY 环境变量
+		log "INFO" "Using API_KEY from API_KEY environment variable"
 		:
 	else
 		# 使用加密的默认值并解密
-		API_KEY=$(decrypt_string "$ENCRYPTED_API_KEY" 2>/dev/null || echo "")
+		log "INFO" "Decrypting API_KEY from encrypted default..."
+		if ! command -v python3 >/dev/null 2>&1; then
+			log "WARNING" "python3 not found, cannot decrypt default API_KEY"
+			API_KEY=""
+		else
+			# 使用 decrypt_string 函数（更可靠）
+			API_KEY=$(decrypt_string "$ENCRYPTED_API_KEY" 2>/dev/null || echo "")
+		fi
 	fi
 	
 	# 导出为全局变量供其他函数使用
 	export SERVER_URL API_KEY
+	
+	if [ -z "$SERVER_URL" ] || [ -z "$API_KEY" ]; then
+		log "INFO" "Server configuration not available, device check will be skipped"
+	fi
 }
 
 # 检查设备状态（参考 upload_devices.sh）
@@ -791,19 +816,30 @@ upload_device_info() {
 
 # 设备检测和上传主函数
 setup_device_check() {
+	log "INFO" "Starting device check process..."
+	log "INFO" "Step 1: Checking for external upload script..."
+	
 	# 检查是否有设备检测脚本（优先使用外部脚本）
 	local upload_script=""
 	if [ -f "./upload_devices.sh" ] && [ -x "./upload_devices.sh" ]; then
 		upload_script="./upload_devices.sh"
+		log "INFO" "Found external script: ./upload_devices.sh"
 	elif [ -f "$HOME/rl-swarm/upload_devices.sh" ] && [ -x "$HOME/rl-swarm/upload_devices.sh" ]; then
 		upload_script="$HOME/rl-swarm/upload_devices.sh"
+		log "INFO" "Found external script: $HOME/rl-swarm/upload_devices.sh"
+	else
+		log "INFO" "No external upload script found, will use internal device check"
 	fi
 	
 	if [ -n "$upload_script" ]; then
+		log "INFO" "Executing external upload script: $upload_script"
+		# 执行外部脚本（不添加超时，让脚本自己处理）
 		if CHECK_ONLY=false "$upload_script" >/dev/null 2>&1; then
+			log "INFO" "External script completed successfully"
 			return 0
 		else
 			local rc=$?
+			log "WARNING" "External script returned code: $rc"
 			if [ "$rc" -eq 2 ]; then
 				log "ERROR" "Device is disabled or not found. Installation aborted."
 				return 2
@@ -814,11 +850,16 @@ setup_device_check() {
 		fi
 	fi
 	
-	local device_code=$(get_device_code)
+	log "INFO" "Step 2: Getting device code..."
+	local device_code=$(get_device_code 2>/dev/null || echo "")
+	
 	if [ -z "$device_code" ]; then
+		log "WARNING" "Could not get device code, skipping device check"
 		return 0
 	fi
+	log "INFO" "Device code obtained: ${device_code:0:8}..."
 	
+	log "INFO" "Step 3: Checking local state file..."
 	# 状态文件路径（与 upload_devices.sh 保持一致）
 	local state_file="$HOME/.device_registered"
 	local old_state_file="$HOME/.tashi_device_registered"
@@ -1409,8 +1450,13 @@ detect_os
 # Check device registration first (before Docker installation)
 # This must be done first to ensure device is authorized before proceeding
 log "INFO" "Checking device registration and authorization..."
+echo ""
+
+# 执行设备检测
 setup_device_check
 device_check_rc=$?
+
+log "INFO" "Device check function returned with code: $device_check_rc"
 
 # 根据返回码处理错误
 if [ "$device_check_rc" -eq 2 ]; then
