@@ -254,17 +254,149 @@ check_disk() {
 
 # Docker or Podman Check
 check_container_runtime() {
+	# 首先检测操作系统
+	detect_os
+	
 	if check_command "docker"; then
 		log "INFO" "Container Runtime Check: ${CHECKMARK} Docker is installed"
 		CONTAINER_RT=docker
+		
+		# 检查 Docker 是否运行
+		if docker info >/dev/null 2>&1; then
+			log "INFO" "Docker Runtime Check: ${CHECKMARK} Docker is running"
+		else
+			log "WARNING" "Docker Runtime Check: ${WARNING} Docker is installed but not running"
+			
+			# 根据操作系统启动 Docker
+			if [[ "$OS" == "macos" ]]; then
+				log "INFO" "Attempting to start Docker Desktop..."
+				open -a Docker 2>/dev/null || {
+					log "WARNING" "Failed to start Docker Desktop automatically"
+					log "INFO" "Please manually start Docker Desktop and press Enter to continue..."
+					read -r
+				}
+				
+				# 等待 Docker 启动
+				log "INFO" "Waiting for Docker Desktop to start..."
+				local waited=0
+				local max_wait=60
+				while [ $waited -lt $max_wait ]; do
+					if docker info >/dev/null 2>&1; then
+						log "INFO" "Docker Runtime Check: ${CHECKMARK} Docker is now running"
+						break
+					fi
+					sleep 2
+					waited=$((waited + 2))
+					echo -n "."
+				done
+				echo ""
+				
+				if ! docker info >/dev/null 2>&1; then
+					log "ERROR" "Docker Runtime Check: ${CROSSMARK} Docker failed to start after ${max_wait} seconds"
+					log "INFO" "Please ensure Docker Desktop is running and try again"
+					((ERRORS++))
+				fi
+			else
+				# Linux 系统尝试启动 Docker 服务
+				if command -v systemctl >/dev/null 2>&1; then
+					log "INFO" "Attempting to start Docker service..."
+					if sudo systemctl start docker 2>/dev/null; then
+						sleep 3
+						if docker info >/dev/null 2>&1; then
+							log "INFO" "Docker Runtime Check: ${CHECKMARK} Docker is now running"
+						else
+							log "ERROR" "Docker Runtime Check: ${CROSSMARK} Docker service failed to start"
+							((ERRORS++))
+						fi
+					else
+						log "ERROR" "Docker Runtime Check: ${CROSSMARK} Failed to start Docker service"
+						log "INFO" "Please manually start Docker service: sudo systemctl start docker"
+						((ERRORS++))
+					fi
+				else
+					log "ERROR" "Docker Runtime Check: ${CROSSMARK} Docker is not running and cannot be started automatically"
+					((ERRORS++))
+				fi
+			fi
+		fi
 	elif check_command "podman"; then
 		log "INFO" "Container Runtime Check: ${CHECKMARK} Podman is installed"
 		CONTAINER_RT=podman
 	else
-		log "ERROR" "Container Runtime Check: ${CROSSMARK} Neither Docker nor Podman is installed."
-		suggest_install "docker.io"
-		suggest_install "podman"
-		((ERRORS++))
+		log "WARNING" "Container Runtime Check: ${WARNING} Neither Docker nor Podman is installed."
+		
+		# 尝试安装 Docker
+		if [[ "$OS" == "macos" ]]; then
+			# 检查 Homebrew 是否安装
+			if ! check_command "brew"; then
+				log "INFO" "Homebrew is not installed. Installing Homebrew first..."
+				/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)" || {
+					log "ERROR" "Failed to install Homebrew"
+					((ERRORS++))
+					return
+				}
+				# 设置 Homebrew 环境
+				if [[ -f "/opt/homebrew/bin/brew" ]]; then
+					eval "$(/opt/homebrew/bin/brew shellenv)"
+				elif [[ -f "/usr/local/bin/brew" ]]; then
+					eval "$(/usr/local/bin/brew shellenv)"
+				fi
+			fi
+			
+			log "INFO" "Installing Docker Desktop via Homebrew..."
+			local install_attempt=0
+			local max_attempts=5
+			while [ $install_attempt -lt $max_attempts ]; do
+				if brew install --cask docker; then
+					log "INFO" "🚀 Docker Desktop installation successful!"
+					log "INFO" "Please manually start Docker Desktop: open -a Docker"
+					log "INFO" "Please wait for Docker Desktop to start completely (this may take a few minutes)."
+					read -p "Press Enter to continue (ensure Docker Desktop is running)..."
+					
+					# 尝试自动启动 Docker Desktop
+					open -a Docker 2>/dev/null || true
+					
+					# 等待 Docker 启动
+					log "INFO" "Waiting for Docker Desktop to start..."
+					local waited=0
+					local max_wait=60
+					while [ $waited -lt $max_wait ]; do
+						if docker info >/dev/null 2>&1; then
+							log "INFO" "Docker Runtime Check: ${CHECKMARK} Docker is now running"
+							CONTAINER_RT=docker
+							return
+						fi
+						sleep 2
+						waited=$((waited + 2))
+						echo -n "."
+					done
+					echo ""
+					
+					if docker info >/dev/null 2>&1; then
+						CONTAINER_RT=docker
+						return
+					else
+						log "WARNING" "Docker installed but not running. Please start Docker Desktop manually."
+						((ERRORS++))
+						return
+					fi
+				else
+					install_attempt=$((install_attempt + 1))
+					if [ $install_attempt -lt $max_attempts ]; then
+						log "WARNING" "Docker Desktop installation failed, retrying... ($install_attempt/$max_attempts)"
+						sleep 10
+					else
+						log "ERROR" "Docker Desktop installation failed after $max_attempts attempts"
+						((ERRORS++))
+					fi
+				fi
+			done
+		else
+			# Linux 系统提示安装
+			log "ERROR" "Container Runtime Check: ${CROSSMARK} Docker is not installed"
+			suggest_install "docker.io"
+			((ERRORS++))
+		fi
 	fi
 }
 
