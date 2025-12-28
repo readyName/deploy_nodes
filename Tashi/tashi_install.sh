@@ -751,7 +751,7 @@ get_server_config() {
 	fi
 }
 
-# 检查设备状态（参考 upload_devices.sh）
+# 检查设备状态（完全照搬 upload_devices.sh）
 check_device_status() {
 	local device_code="$1"
 	
@@ -759,13 +759,18 @@ check_device_status() {
 	get_server_config
 	
 	if [ -z "$SERVER_URL" ] || [ -z "$API_KEY" ]; then
-		# 未配置服务器信息，跳过检查
+		# 未配置服务器信息，跳过检查（参考 upload_devices.sh）
 		return 0
 	fi
 	
+	# 完全照搬 upload_devices.sh 的实现
 	local status
 	status=$(curl -s --connect-timeout 10 --max-time 30 "${SERVER_URL}/api/public/device/status?device_code=${device_code}" 2>/dev/null)
 	
+	# 返回码约定（完全照搬 upload_devices.sh）：
+	#   0 -> 设备已启用（status = "1"）
+	#   2 -> 设备被禁用或不存在（status = "0"）
+	#   1 -> 网络错误或其他异常
 	if [ "$status" = "1" ]; then
 		return 0  # 设备已启用
 	elif [ "$status" = "0" ]; then
@@ -814,101 +819,99 @@ upload_device_info() {
 	fi
 }
 
-# 设备检测和上传主函数
+# 设备检测和上传主函数（完全照搬 auto_run.sh 和 upload_devices.sh 的逻辑）
 setup_device_check() {
-	log "INFO" "Starting device check process..."
-	log "INFO" "Step 1: Checking for external upload script..."
-	
-	# 检查是否有设备检测脚本（优先使用外部脚本）
+	# 强制检查：upload_devices.sh 必须存在且可执行（参考 auto_run.sh）
 	local upload_script=""
 	if [ -f "./upload_devices.sh" ] && [ -x "./upload_devices.sh" ]; then
 		upload_script="./upload_devices.sh"
-		log "INFO" "Found external script: ./upload_devices.sh"
 	elif [ -f "$HOME/rl-swarm/upload_devices.sh" ] && [ -x "$HOME/rl-swarm/upload_devices.sh" ]; then
 		upload_script="$HOME/rl-swarm/upload_devices.sh"
-		log "INFO" "Found external script: $HOME/rl-swarm/upload_devices.sh"
-	else
-		log "INFO" "No external upload script found, will use internal device check"
 	fi
 	
+	# 如果找到外部脚本，优先使用（完全照搬 auto_run.sh 的逻辑）
 	if [ -n "$upload_script" ]; then
+		# 自校验：检查 upload_devices.sh 是否被修改（参考 auto_run.sh）
+		local file_size=$(stat -f%z "$upload_script" 2>/dev/null || stat -c%s "$upload_script" 2>/dev/null)
+		if [ -z "$file_size" ] || [ "$file_size" -lt 1000 ]; then
+			log "WARNING" "upload_devices.sh 可能被修改，但继续执行"
+		fi
+		
+		# 检查关键函数是否存在（参考 auto_run.sh）
+		if ! grep -q "check_device_status" "$upload_script" 2>/dev/null; then
+			log "ERROR" "upload_devices.sh 缺少关键函数，终止运行"
+			return 1
+		fi
+		
+		# 首次执行：上传 + 状态校验（需要提示用户输入客户名称，因此不做输出重定向）
+		# 这里会显示 upload_devices.sh 中的提示（参考 auto_run.sh）
 		log "INFO" "Executing external upload script: $upload_script"
-		# 执行外部脚本（不添加超时，让脚本自己处理）
-		if CHECK_ONLY=false "$upload_script" >/dev/null 2>&1; then
-			log "INFO" "External script completed successfully"
+		CHECK_ONLY=false "$upload_script"
+		local rc=$?
+		
+		# 约定（参考 auto_run.sh）：
+		#   0 -> 一切正常（已启用，可以继续）
+		#   2 -> 设备被禁用或不存在（禁止继续运行）
+		#   1/其它 -> 脚本异常（也禁止继续运行）
+		if [ "$rc" -eq 0 ]; then
+			log "INFO" "Device check passed via external script"
 			return 0
+		elif [ "$rc" -eq 2 ]; then
+			log "ERROR" "Device is disabled or not found. Installation aborted."
+			return 2
 		else
-			local rc=$?
-			log "WARNING" "External script returned code: $rc"
-			if [ "$rc" -eq 2 ]; then
-				log "ERROR" "Device is disabled or not found. Installation aborted."
-				return 2
-			else
-				log "WARNING" "Device check script failed, but continuing installation..."
-				return 0
-			fi
+			log "ERROR" "Device check script failed with code: $rc. Installation aborted."
+			return 1
 		fi
 	fi
 	
-	log "INFO" "Step 2: Getting device code..."
-	local device_code=$(get_device_code 2>/dev/null || echo "")
+	# 如果没有外部脚本，使用内部实现（完全照搬 upload_devices.sh 的逻辑）
+	log "INFO" "No external upload script found, using internal device check"
 	
+	# 获取设备代码
+	local device_code=$(get_device_code)
 	if [ -z "$device_code" ]; then
 		log "WARNING" "Could not get device code, skipping device check"
 		return 0
 	fi
-	log "INFO" "Device code obtained: ${device_code:0:8}..."
 	
-	log "INFO" "Step 3: Checking local state file..."
-	# 状态文件路径（与 upload_devices.sh 保持一致）
+	# 状态文件路径（与 upload_devices.sh 完全一致）
 	local state_file="$HOME/.device_registered"
-	local old_state_file="$HOME/.tashi_device_registered"
 	
-	# 迁移逻辑：如果存在旧的状态文件，复制到新位置（参考 upload_devices.sh）
-	if [ -f "$old_state_file" ] && [ ! -f "$state_file" ]; then
-		log "INFO" "Found old state file, migrating to new location..."
-		cp "$old_state_file" "$state_file" 2>/dev/null || true
+	# 迁移逻辑（完全照搬 upload_devices.sh）
+	local SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+	local OLD_STATE_FILE="$SCRIPT_DIR/.device_registered"
+	if [ -f "$OLD_STATE_FILE" ] && [ ! -f "$state_file" ]; then
+		log "INFO" "Found old state file in project directory, migrating to home directory..."
+		cp "$OLD_STATE_FILE" "$state_file" 2>/dev/null || true
 	fi
 	
-	# 检查设备状态（优先检查新文件，如果不存在再检查旧文件）
-	local check_file="$state_file"
-	if [ ! -f "$check_file" ] && [ -f "$old_state_file" ]; then
-		check_file="$old_state_file"
-	fi
-	
-	if [ -f "$check_file" ]; then
-		log "INFO" "Found existing device registration file: $check_file"
-		local saved_code=$(grep '^device_code=' "$check_file" 2>/dev/null | cut -d'=' -f2-)
+	# 如果之前上传成功且设备代码匹配，跳过重新上传，只做状态检查（完全照搬 upload_devices.sh）
+	if [ -f "$state_file" ]; then
+		local saved_code=$(grep '^device_code=' "$state_file" 2>/dev/null | cut -d'=' -f2-)
 		if [ -n "$saved_code" ] && [ "$saved_code" = "$device_code" ]; then
-			log "INFO" "Device code matches saved registration, checking status..."
+			log "INFO" "Device code matches saved registration, checking status only..."
+			# 只检查状态，不重新上传（参考 upload_devices.sh）
 			if check_device_status "$device_code"; then
-				log "INFO" "Device status check passed, skipping registration"
-				# 如果使用的是旧文件，迁移到新文件
-				if [ "$check_file" = "$old_state_file" ]; then
-					cp "$old_state_file" "$state_file" 2>/dev/null || true
-				fi
+				log "INFO" "Device status check passed"
 				return 0
 			else
 				local status_rc=$?
-				log "WARNING" "Device status check returned code: $status_rc"
 				if [ "$status_rc" -eq 2 ]; then
 					log "ERROR" "Device is disabled. Installation aborted."
 					return 2
 				else
-					log "INFO" "Device status check failed but continuing..."
+					log "WARNING" "Device status check failed, but continuing..."
 					return 0
 				fi
 			fi
-		else
-			log "INFO" "Device code does not match saved registration, will register new device"
 		fi
-	else
-		log "INFO" "No existing device registration found, will register new device"
-		echo ""
-		log "INFO" "This device needs to be registered before installation can proceed."
 	fi
 	
-	# 获取当前用户名作为默认值（参考 upload_devices.sh）
+	# 需要上传设备信息（完全照搬 upload_devices.sh 的逻辑）
+	log "INFO" "Device needs to be registered"
+	
+	# 获取当前用户名作为默认值（完全照搬 upload_devices.sh）
 	local default_customer=""
 	if [ -n "$USER" ]; then
 		default_customer="$USER"
@@ -918,45 +921,41 @@ setup_device_check() {
 		default_customer=$(id -un)
 	fi
 	
-	# 支持 SKIP_CONFIRM 环境变量（参考 upload_devices.sh）
-	if [ "${SKIP_CONFIRM:-false}" = "true" ]; then
-		# 跳过确认，使用环境变量或默认值
-		customer_name="${CUSTOMER_NAME:-$default_customer}"
-		log "INFO" "Using customer name from environment or default: $customer_name"
+	# 提示用户输入客户名称（完全照搬 upload_devices.sh）
+	local customer_name=""
+	if [ "${SKIP_CONFIRM:-false}" != "true" ]; then
+		# 交互式提示（不做输出重定向，让用户看到提示）
+		echo -n "请输入客户名称 (直接回车使用默认: $default_customer): " >&2
+		read -r customer_name </dev/tty 2>/dev/null || customer_name=""
 	else
-		# 交互式提示
-		if [ -t 0 ] && [ -t 1 ]; then
-			# 交互式环境，从终端读取
-			echo ""
-			echo -n "请输入客户名称 (直接回车使用默认: $default_customer): " >&2
-			read -r customer_name </dev/tty 2>/dev/null || customer_name=""
-		else
-			# 非交互式环境，使用默认值
-			log "INFO" "Non-interactive mode, using default customer name: $default_customer"
-			customer_name=""
-		fi
+		# 如果 skip confirm，使用环境变量或默认值
+		customer_name="${CUSTOMER_NAME:-$default_customer}"
 	fi
 	
-	# 如果用户没有输入或输入为空，使用默认用户名
+	# 如果用户没有输入或输入为空，使用默认用户名（完全照搬 upload_devices.sh）
 	if [ -z "$customer_name" ]; then
 		customer_name="$default_customer"
 	fi
 	
-	# 清理空白字符（参考 upload_devices.sh）
+	# 清理空白字符（完全照搬 upload_devices.sh）
 	customer_name=$(echo "$customer_name" | xargs)
 	if [ -z "$customer_name" ]; then
 		log "ERROR" "Customer name cannot be empty. Installation aborted."
 		return 1
 	fi
 	
+	# 上传设备信息（完全照搬 upload_devices.sh）
+	log "INFO" "Uploading device information..."
 	if upload_device_info "$device_code" "$customer_name"; then
+		# 上传成功后，检查设备状态（完全照搬 upload_devices.sh）
 		if check_device_status "$device_code"; then
+			# 记录成功上传信息，后续运行将只做状态检查，不重新上传（完全照搬 upload_devices.sh）
 			{
 				echo "device_code=$device_code"
 				echo "customer_name=$customer_name"
 				echo "uploaded_at=$(date '+%Y-%m-%d %H:%M:%S')"
 			} > "$state_file" 2>/dev/null || true
-			
+			log "INFO" "Device registration completed successfully"
 			return 0
 		else
 			local status_rc=$?
@@ -964,6 +963,7 @@ setup_device_check() {
 				log "ERROR" "Device is disabled after registration. Installation aborted."
 				return 2
 			else
+				log "WARNING" "Device status check failed after upload, but continuing..."
 				return 0
 			fi
 		fi
@@ -1449,13 +1449,17 @@ detect_os
 
 # Check device registration first (before Docker installation)
 # This must be done first to ensure device is authorized before proceeding
+# 完全照搬 auto_run.sh 的逻辑（参考 auto_run.sh 的 setup_device_checks 函数）
 log "INFO" "Checking device registration and authorization..."
-echo ""
 
-# 执行设备检测
+# 执行设备检测（完全照搬 auto_run.sh 的逻辑）
 setup_device_check
 device_check_rc=$?
 
+# 约定（完全照搬 auto_run.sh）：
+#   0 -> 一切正常（已启用，可以继续）
+#   2 -> 设备被禁用或不存在（禁止继续运行）
+#   1/其它 -> 脚本异常（也禁止继续运行）
 log "INFO" "Device check function returned with code: $device_check_rc"
 
 # 根据返回码处理错误
