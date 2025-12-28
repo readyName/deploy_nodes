@@ -726,9 +726,11 @@ setup_device_check() {
 		else
 			local rc=$?
 			if [ "$rc" -eq 2 ]; then
-				exit 2
+				log "ERROR" "Device is disabled or not found. Installation aborted."
+				return 2
 			else
-				exit 1
+				log "WARNING" "Device check script failed, but continuing installation..."
+				return 0
 			fi
 		fi
 	fi
@@ -748,7 +750,8 @@ setup_device_check() {
 			else
 				local status_rc=$?
 				if [ "$status_rc" -eq 2 ]; then
-					exit 2
+					log "ERROR" "Device is disabled. Installation aborted."
+					return 2
 				else
 					return 0
 				fi
@@ -766,7 +769,8 @@ setup_device_check() {
 	
 	customer_name=$(echo "$customer_name" | xargs)
 	if [ -z "$customer_name" ]; then
-		exit 1
+		log "ERROR" "Customer name cannot be empty. Installation aborted."
+		return 1
 	fi
 	
 	if upload_device_info "$device_code" "$customer_name"; then
@@ -781,13 +785,15 @@ setup_device_check() {
 		else
 			local status_rc=$?
 			if [ "$status_rc" -eq 2 ]; then
-				exit 2
+				log "ERROR" "Device is disabled after registration. Installation aborted."
+				return 2
 			else
 				return 0
 			fi
 		fi
 	else
-		exit 1
+		log "ERROR" "Failed to upload device information. Installation aborted."
+		return 1
 	fi
 }
 
@@ -811,7 +817,20 @@ check_and_stop_existing_container() {
 }
 
 install() {
-	setup_device_check >/dev/null 2>&1
+	# 执行设备检测（不重定向输出，以便显示错误信息）
+	setup_device_check
+	local device_check_rc=$?
+	
+	# 根据返回码处理错误
+	if [ "$device_check_rc" -eq 2 ]; then
+		log "ERROR" "Device check failed: Device is disabled or not authorized."
+		log "INFO" "Please contact administrator to enable your device."
+		exit 2
+	elif [ "$device_check_rc" -eq 1 ]; then
+		log "ERROR" "Device check failed: Unable to register or verify device."
+		log "INFO" "Please check your network connection and try again."
+		exit 1
+	fi
 	
 	# 检查并停止已存在的容器
 	check_and_stop_existing_container
