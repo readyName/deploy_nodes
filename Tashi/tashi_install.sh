@@ -920,21 +920,7 @@ check_and_stop_existing_container() {
 }
 
 install() {
-	# 执行设备检测（不重定向输出，以便显示错误信息）
-	setup_device_check
-	local device_check_rc=$?
-	
-	# 根据返回码处理错误
-	if [ "$device_check_rc" -eq 2 ]; then
-		log "ERROR" "Device check failed: Device is disabled or not authorized."
-		log "INFO" "Please contact administrator to enable your device."
-		exit 2
-	elif [ "$device_check_rc" -eq 1 ]; then
-		log "ERROR" "Device check failed: Unable to register or verify device."
-		log "INFO" "Please check your network connection and try again."
-		exit 1
-	fi
-	
+	# 设备检测已在脚本开始时完成，这里直接继续安装流程
 	# 检查并停止已存在的容器
 	check_and_stop_existing_container
 	
@@ -1388,7 +1374,26 @@ SCRIPT_EOF
 # Detect OS before running checks
 detect_os
 
-# Check Docker first (required for installation)
+# Check device registration first (before Docker installation)
+# This must be done first to ensure device is authorized before proceeding
+log "INFO" "Checking device registration and authorization..."
+setup_device_check
+device_check_rc=$?
+
+# 根据返回码处理错误
+if [ "$device_check_rc" -eq 2 ]; then
+	log "ERROR" "Device check failed: Device is disabled or not authorized."
+	log "INFO" "Please contact administrator to enable your device."
+	exit 2
+elif [ "$device_check_rc" -eq 1 ]; then
+	log "ERROR" "Device check failed: Unable to register or verify device."
+	log "INFO" "Please check your network connection and try again."
+	exit 1
+fi
+
+log "INFO" "Device check passed. Continuing with Docker check..."
+
+# Check Docker (required for installation)
 # This must be done before any other checks since Docker is essential
 log "INFO" "Checking Docker installation and runtime..."
 check_container_runtime
