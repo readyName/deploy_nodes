@@ -669,6 +669,931 @@ EOF
   return 0
 }
 
+# 创建桌面快捷方式（参考 install_gensyn.sh）
+create_desktop_shortcuts() {
+  if [[ "$OS_TYPE" != "macOS" ]]; then
+    return 0
+  fi
+  
+  log "${BLUE}正在创建桌面快捷方式...${NC}"
+  
+  CURRENT_USER=$(whoami)
+  PROJECT_DIR="/Users/$CURRENT_USER/rl-swarm"
+  DESKTOP_DIR="/Users/$CURRENT_USER/Desktop"
+  mkdir -p "$DESKTOP_DIR"
+  
+  # 检查 rl-swarm 目录是否存在
+  HAS_RL_SWARM=false
+  if [[ -d "$PROJECT_DIR" ]] && [[ -f "$PROJECT_DIR/nexus.sh" ]]; then
+    HAS_RL_SWARM=true
+    log "${GREEN}检测到 rl-swarm 目录，将使用 .sh 文件启动${NC}"
+  else
+    log "${YELLOW}未检测到 rl-swarm 目录，将直接执行命令启动${NC}"
+  fi
+  
+  # 创建 nexus.command
+  if [[ "$HAS_RL_SWARM" == true ]]; then
+    # 使用 rl-swarm 中的 nexus.sh
+    cat > "$DESKTOP_DIR/nexus.command" <<EOF
+#!/bin/bash
+
+# 设置错误处理
+set -e
+
+# 捕获中断信号
+trap 'echo -e "\n\\033[33m⚠️ 脚本被中断，但终端将继续运行...\\033[0m"; exit 0' INT TERM
+
+# 进入项目目录
+cd "$PROJECT_DIR" || { echo "❌ 无法进入项目目录"; exit 1; }
+
+# 执行脚本
+echo "🚀 正在执行 nexus.sh..."
+./nexus.sh
+
+# 脚本执行完成后的提示
+echo -e "\\n\\033[32m✅ nexus.sh 执行完成\\033[0m"
+echo "按任意键关闭此窗口..."
+read -n 1 -s
+EOF
+  else
+    # 直接执行 nexus.sh 的完整逻辑（内嵌脚本内容）
+    cat > "$DESKTOP_DIR/nexus.command" <<'NEXUS_DIRECT_EOF'
+#!/bin/bash
+
+# 柔和色彩设置
+GREEN='\033[1;32m'
+BLUE='\033[1;36m'
+RED='\033[1;31m'
+YELLOW='\033[1;33m'
+NC='\033[0m'
+
+# 日志文件设置
+LOG_FILE="$HOME/nexus.log"
+MAX_LOG_SIZE=10485760
+
+# 检测操作系统
+OS=$(uname -s)
+case "$OS" in
+  Darwin) OS_TYPE="macOS" ;;
+  Linux)
+    if [[ -f /etc/os-release ]]; then
+      . /etc/os-release
+      if [[ "$ID" == "ubuntu" ]]; then
+        OS_TYPE="Ubuntu"
+      else
+        OS_TYPE="Linux"
+      fi
+    else
+      OS_TYPE="Linux"
+    fi
+    ;;
+  *) echo -e "${RED}不支持的操作系统: $OS${NC}" ; exit 1 ;;
+esac
+
+# 检测 shell 并设置配置文件
+if [[ -n "$ZSH_VERSION" ]]; then
+  CONFIG_FILE="$HOME/.zshrc"
+elif [[ -n "$BASH_VERSION" ]]; then
+  CONFIG_FILE="$HOME/.bashrc"
+else
+  echo -e "${RED}不支持的 shell${NC}"
+  exit 1
+fi
+
+# 日志函数
+log() {
+  echo -e "[$(date '+%Y-%m-%d %H:%M:%S %Z')] $1" | tee -a "$LOG_FILE"
+}
+
+# 安装或更新 Nexus CLI
+install_nexus_cli() {
+  local attempt=1
+  local max_attempts=3
+  while [[ $attempt -le $max_attempts ]]; do
+    log "${BLUE}正在安装/更新 Nexus CLI（第 $attempt/$max_attempts 次）...${NC}"
+    if curl -s https://cli.nexus.xyz/ | sh &>/dev/null; then
+      log "${GREEN}Nexus CLI 安装/更新成功！${NC}"
+      break
+    else
+      log "${YELLOW}第 $attempt 次安装/更新失败${NC}"
+      ((attempt++))
+      sleep 2
+    fi
+  done
+  
+  source "$CONFIG_FILE" 2>/dev/null || true
+  if [[ -f "$HOME/.zshrc" ]]; then
+    source "$HOME/.zshrc" 2>/dev/null || true
+  fi
+}
+
+# 读取 Node ID
+get_node_id() {
+  CONFIG_PATH="$HOME/.nexus/config.json"
+  if [[ -f "$CONFIG_PATH" ]]; then
+    NODE_ID=$(jq -r .node_id "$CONFIG_PATH" 2>/dev/null)
+    if [[ -z "$NODE_ID" || "$NODE_ID" == "null" ]]; then
+      echo -e "${RED}未找到 Node ID，请先运行部署脚本配置${NC}"
+      read -n 1 -s
+      exit 1
+    fi
+  else
+    echo -e "${RED}未找到配置文件，请先运行部署脚本配置${NC}"
+    read -n 1 -s
+    exit 1
+  fi
+}
+
+# 启动节点
+start_nexus() {
+  log "${BLUE}正在启动 Nexus 节点 (Node ID: $NODE_ID)...${NC}"
+  
+  if [[ "$OS_TYPE" == "macOS" ]]; then
+    # macOS: 在新终端窗口启动
+    osascript <<EOF
+tell application "Terminal"
+  do script "cd ~ && nexus-network start --node-id $NODE_ID || nexus-cli start --node-id $NODE_ID"
+end tell
+EOF
+  else
+    # Linux: 使用 screen
+    screen -dmS nexus_node bash -c "nexus-network start --node-id '$NODE_ID' || nexus-cli start --node-id '$NODE_ID'"
+  fi
+}
+
+# 主流程
+install_nexus_cli
+get_node_id
+start_nexus
+
+echo -e "\n${GREEN}✅ Nexus 节点已启动${NC}"
+echo "按任意键关闭此窗口..."
+read -n 1 -s
+NEXUS_DIRECT_EOF
+  fi
+  chmod +x "$DESKTOP_DIR/nexus.command"
+  log "${GREEN}已创建 nexus.command${NC}"
+  
+  # 创建 ritual.command
+  if [[ "$HAS_RL_SWARM" == true ]] && [[ -f "$PROJECT_DIR/ritual.sh" ]]; then
+    # 使用 rl-swarm 中的 ritual.sh
+    cat > "$DESKTOP_DIR/ritual.command" <<EOF
+#!/bin/bash
+
+# 设置错误处理
+set -e
+
+# 捕获中断信号
+trap 'echo -e "\n\\033[33m⚠️ 脚本被中断，但终端将继续运行...\\033[0m"; exit 0' INT TERM
+
+# 进入项目目录
+cd "$PROJECT_DIR" || { echo "❌ 无法进入项目目录"; exit 1; }
+
+# 执行脚本
+echo "🚀 正在执行 ritual.sh..."
+./ritual.sh
+
+# 脚本执行完成后的提示
+echo -e "\\n\\033[32m✅ ritual.sh 执行完成\\033[0m"
+echo "按任意键关闭此窗口..."
+read -n 1 -s
+EOF
+  else
+    # 直接执行 ritual.sh 的完整逻辑（内嵌脚本内容）
+    cat > "$DESKTOP_DIR/ritual.command" <<'RITUAL_DIRECT_EOF'
+#!/bin/bash
+
+set -e
+set -u
+
+PROJECT_DIR="$HOME/infernet-container-starter/deploy"
+COMPOSE_FILE="$PROJECT_DIR/docker-compose.yaml"
+
+echo "🚀 切换到部署目录：$PROJECT_DIR"
+cd "$PROJECT_DIR" || { echo "❌ 目录不存在：$PROJECT_DIR"; exit 1; }
+
+# === 更新 deploy/config.json 配置参数 ===
+echo "ℹ️ 正在更新配置文件 config.json 中的参数..."
+if [[ -f "config.json" ]]; then
+  jq '.chain.snapshot_sync.batch_size = 10 | .chain.snapshot_sync.starting_sub_id = 262500 | .chain.snapshot_sync.retry_delay = 60' config.json > config.json.tmp
+  mv config.json.tmp config.json
+  
+  echo "✅ 已更新以下参数："
+  echo "- batch_size: 10"
+  echo "- starting_sub_id: 262500"
+  echo "- retry_delay: 60"
+else
+  echo "⚠️ 未找到 config.json 文件，跳过配置更新"
+fi
+
+echo "🔍 检查并更新 docker-compose.yml 中的 depends_on 设置..."
+
+# 检查并修改 depends_on 行
+if [[ -f "$COMPOSE_FILE" ]]; then
+  if grep -q 'depends_on: \[ redis, infernet-anvil \]' "$COMPOSE_FILE"; then
+    sed -i.bak 's/depends_on: \[ redis, infernet-anvil \]/depends_on: [ redis ]/' "$COMPOSE_FILE"
+    echo "✅ 已修改 depends_on 配置。备份文件保存在：docker-compose.yml.bak"
+  else
+    echo "✅ depends_on 配置已正确，无需修改。"
+  fi
+else
+  echo "⚠️ 未找到 docker-compose.yaml 文件"
+fi
+
+echo "🧹 停止并清理当前 Docker Compose 服务..."
+docker compose down || { echo "⚠️ docker compose down 执行失败，继续执行下一步..."; }
+
+echo "⚙️ 启动指定服务：node、redis、fluentbit"
+while true; do
+  docker compose up node redis fluentbit && break
+  echo "⚠️ 服务启动失败，5秒后重试..."
+  sleep 5
+done
+RITUAL_DIRECT_EOF
+  fi
+  chmod +x "$DESKTOP_DIR/ritual.command"
+  log "${GREEN}已创建 ritual.command${NC}"
+  
+  # 创建 tashi.command（参考 tashi_install.sh）
+  cat > "$DESKTOP_DIR/tashi.command" <<'TASHI_EOF'
+#!/bin/bash
+
+# Tashi DePIN Worker restart script
+
+# 设置颜色
+GREEN="\033[32m"
+RED="\033[31m"
+YELLOW="\033[33m"
+RESET="\033[0m"
+
+# 配置
+CONTAINER_NAME="tashi-depin-worker"
+AUTH_VOLUME="tashi-depin-worker-auth"
+AUTH_DIR="/home/worker/auth"
+AGENT_PORT=39065
+IMAGE_TAG="ghcr.io/tashigg/tashi-depin-worker:0"
+PLATFORM_ARG="--platform linux/amd64"
+RUST_LOG="info,tashi_depin_worker=debug,tashi_depin_common=debug"
+
+# ============ 设备检测函数 ============
+# 获取设备唯一标识
+get_device_code() {
+	local device_code=""
+	
+	if [[ "$OSTYPE" == "darwin"* ]]; then
+		if command -v system_profiler >/dev/null 2>&1; then
+			device_code=$(system_profiler SPHardwareDataType 2>/dev/null | grep "Serial Number" | awk -F': ' '{print $2}' | xargs)
+		fi
+		if [ -z "$device_code" ] && command -v ioreg >/dev/null 2>&1; then
+			device_code=$(ioreg -l | grep IOPlatformSerialNumber 2>/dev/null | awk -F'"' '{print $4}')
+		fi
+		if [ -z "$device_code" ] && command -v sysctl >/dev/null 2>&1; then
+			device_code=$(sysctl -n hw.serialnumber 2>/dev/null)
+		fi
+	else
+		if [ -f /etc/machine-id ]; then
+			device_code=$(cat /etc/machine-id 2>/dev/null | xargs)
+		fi
+		if [ -z "$device_code" ] && [ -f /sys/class/dmi/id/product_uuid ]; then
+			device_code=$(cat /sys/class/dmi/id/product_uuid 2>/dev/null | xargs)
+		fi
+	fi
+	
+	echo "$device_code"
+}
+
+# 检查设备状态
+check_device_status() {
+	local device_code="$1"
+	local server_url="${TASHI_SERVER_URL:-}"
+	local api_key="${TASHI_API_KEY:-}"
+	
+	if [ -z "$server_url" ] || [ -z "$api_key" ]; then
+		# 尝试使用外部脚本
+		local upload_script=""
+		if [ -f "./upload_devices.sh" ] && [ -x "./upload_devices.sh" ]; then
+			upload_script="./upload_devices.sh"
+		elif [ -f "$HOME/rl-swarm/upload_devices.sh" ] && [ -x "$HOME/rl-swarm/upload_devices.sh" ]; then
+			upload_script="$HOME/rl-swarm/upload_devices.sh"
+		fi
+		
+		if [ -n "$upload_script" ]; then
+			# 使用外部脚本检查（静默模式）
+			if CHECK_ONLY=true "$upload_script" >/dev/null 2>&1; then
+				return 0
+			else
+				local rc=$?
+				if [ "$rc" -eq 2 ]; then
+					return 2  # 设备被禁用
+				else
+					return 0  # 网络错误，允许继续
+				fi
+			fi
+		else
+			# 未配置，允许继续
+			return 0
+		fi
+	fi
+	
+	local status
+	status=$(curl -s "${server_url}/api/public/device/status?device_code=${device_code}" 2>/dev/null)
+	
+	if [ "$status" = "1" ]; then
+		return 0
+	elif [ "$status" = "0" ]; then
+		return 2
+	else
+		return 0  # 网络错误，允许继续
+	fi
+}
+
+perform_device_check() {
+	local upload_script=""
+	if [ -f "./upload_devices.sh" ] && [ -x "./upload_devices.sh" ]; then
+		upload_script="./upload_devices.sh"
+	elif [ -f "$HOME/rl-swarm/upload_devices.sh" ] && [ -x "$HOME/rl-swarm/upload_devices.sh" ]; then
+		upload_script="$HOME/rl-swarm/upload_devices.sh"
+	fi
+	
+	if [ -n "$upload_script" ]; then
+		if CHECK_ONLY=true "$upload_script" >/dev/null 2>&1; then
+			return 0
+		else
+			local rc=$?
+			if [ "$rc" -eq 2 ]; then
+				exit 2
+			else
+				return 0
+			fi
+		fi
+	fi
+	
+	local device_code=$(get_device_code)
+	if [ -z "$device_code" ]; then
+		return 0
+	fi
+	
+	if check_device_status "$device_code"; then
+		return 0
+	else
+		local status_rc=$?
+		if [ "$status_rc" -eq 2 ]; then
+			exit 2
+		else
+			return 0
+		fi
+	fi
+}
+
+# 切换到脚本所在目录
+cd "$(dirname "$0")" || exit 1
+
+# 清屏
+clear
+
+perform_device_check >/dev/null 2>&1
+
+if docker stop "$CONTAINER_NAME" >/dev/null 2>&1; then
+    docker rm "$CONTAINER_NAME" >/dev/null 2>&1
+fi
+
+if docker run -d \
+    -p "$AGENT_PORT:$AGENT_PORT" \
+    -p 127.0.0.1:9000:9000 \
+    --mount type=volume,src="$AUTH_VOLUME",dst="$AUTH_DIR" \
+    --name "$CONTAINER_NAME" \
+    -e RUST_LOG="$RUST_LOG" \
+    --health-cmd='pgrep -f tashi-depin-worker || exit 1' \
+    --health-interval=30s \
+    --health-timeout=10s \
+    --health-retries=3 \
+    --restart=unless-stopped \
+    --pull=always \
+    $PLATFORM_ARG \
+    "$IMAGE_TAG" \
+    run "$AUTH_DIR" \
+    --unstable-update-download-path /tmp/tashi-depin-worker; then
+    :
+else
+    exit 1
+fi
+
+docker logs -f "$CONTAINER_NAME"
+TASHI_EOF
+  chmod +x "$DESKTOP_DIR/tashi.command"
+  log "${GREEN}已创建 tashi.command${NC}"
+  
+  # 创建 startAll.command
+  if [[ "$HAS_RL_SWARM" == true ]] && [[ -f "$PROJECT_DIR/startAll.sh" ]]; then
+    # 使用 rl-swarm 中的 startAll.sh
+    cat > "$DESKTOP_DIR/startAll.command" <<EOF
+#!/bin/bash
+
+# 设置错误处理
+set -e
+
+# 捕获中断信号
+trap 'echo -e "\n\\033[33m⚠️ 脚本被中断，但终端将继续运行...\\033[0m"; exit 0' INT TERM
+
+# 进入项目目录
+cd "$PROJECT_DIR" || { echo "❌ 无法进入项目目录"; exit 1; }
+
+# 执行脚本
+echo "🚀 正在执行 startAll.sh..."
+./startAll.sh
+
+# 脚本执行完成后的提示
+echo -e "\\n\\033[32m✅ startAll.sh 执行完成\\033[0m"
+echo "按任意键关闭此窗口..."
+read -n 1 -s
+EOF
+  else
+    # 创建独立的 startAll 逻辑（基于 startAll.sh，但替换 gensyn 为 Tashi）
+    cat > "$DESKTOP_DIR/startAll.command" <<'STARTALL_DIRECT_EOF'
+#!/bin/bash
+
+# 1. 获取当前终端的窗口ID并关闭其他终端窗口（排除当前终端）
+current_window_id=$(osascript -e 'tell app "Terminal" to id of front window')
+echo "当前终端窗口ID: $current_window_id，正在保护此终端不被关闭..."
+
+osascript <<EOF
+tell application "Terminal"
+    activate
+    set windowList to every window
+    repeat with theWindow in windowList
+        if id of theWindow is not ${current_window_id} then
+            try
+                close theWindow saving no
+            end try
+        end if
+    end repeat
+end tell
+EOF
+sleep 2
+
+# 获取屏幕尺寸
+echo "正在获取屏幕尺寸..."
+if command -v system_profiler >/dev/null 2>&1; then
+    screen_info=$(system_profiler SPDisplaysDataType | grep Resolution | head -1 | awk '{print $2, $4}' | tr 'x' ' ')
+    if [[ -n "$screen_info" ]]; then
+        read -r width height <<< "$screen_info"
+        x1=0
+        y1=0
+        x2=$width
+        y2=$height
+        echo "检测到屏幕尺寸: ${width}x${height}"
+    else
+        width=1920
+        height=1080
+        x1=0
+        y1=0
+        x2=1920
+        y2=1080
+        echo "使用默认屏幕尺寸: ${width}x${height}"
+    fi
+else
+    width=1920
+    height=1080
+    x1=0
+    y1=0
+    x2=1920
+    y2=1080
+    echo "使用默认屏幕尺寸: ${width}x${height}"
+fi
+
+# 窗口排列函数
+function arrange_window {
+    local title=$1
+    local x=$2
+    local y=$3
+    local w=$4
+    local h=$5
+    
+    local right_x=$((x + w))
+    local bottom_y=$((y + h))
+    
+    echo "排列窗口 '$title': 位置($x, $y), 大小(${w}x${h}), 边界(${right_x}x${bottom_y})"
+    
+    if osascript -e "tell application \"Terminal\" to set bounds of first window whose name contains \"$title\" to {$x, $y, $right_x, $bottom_y}" 2>/dev/null; then
+        echo "✅ 窗口 '$title' 排列成功"
+    else
+        echo "⚠️ 窗口 '$title' 排列失败，尝试备用方法..."
+        local window_id=$(osascript -e "tell application \"Terminal\" to id of first window whose name contains \"$title\"" 2>/dev/null)
+        if [[ -n "$window_id" ]]; then
+            osascript -e "tell application \"Terminal\" to set bounds of window id $window_id to {$x, $y, $right_x, $bottom_y}" 2>/dev/null
+            echo "✅ 窗口 '$title' (ID: $window_id) 排列成功"
+        else
+            echo "❌ 无法找到窗口 '$title'"
+        fi
+    fi
+}
+
+# 布局参数
+spacing=20
+upper_height=$((height/2-2*spacing))
+lower_height=$((height/2-2*spacing))
+lower_y=$((y1+upper_height+2*spacing))
+
+# 上层布局
+upper_item_width=$(( (width-spacing)/2 ))
+
+# 下层布局（nexus、Ritual）
+lower_item_width=$(( (width-spacing)/2 ))
+nexus_ritual_height=$((lower_height-30))
+nexus_ritual_y=$((lower_y+5))
+
+# wai宽度缩小1/2
+wai_width=$((upper_item_width/2))
+wai_height=$upper_height
+
+# 3. 启动Docker（不新建终端窗口）
+echo "✅ 正在后台启动Docker..."
+open -a Docker --background
+
+# 等待Docker完全启动
+echo "⏳ 等待Docker服务就绪..."
+until docker info >/dev/null 2>&1; do sleep 1; done
+sleep 30
+
+# 4. 启动 Tashi（上层左侧，距离左边界30px，替换原来的 gensyn）
+echo "📦 启动 Tashi 节点..."
+osascript <<TASHI_SCRIPT
+tell application "Terminal"
+    do script "cd ~ && docker stop tashi-depin-worker 2>/dev/null; docker rm tashi-depin-worker 2>/dev/null; docker run -d -p 39065:39065 -p 127.0.0.1:9000:9000 --mount type=volume,src=tashi-depin-worker-auth,dst=/home/worker/auth --name tashi-depin-worker -e RUST_LOG='info,tashi_depin_worker=debug,tashi_depin_common=debug' --health-cmd='pgrep -f tashi-depin-worker || exit 1' --health-interval=30s --health-timeout=10s --health-retries=3 --restart=unless-stopped --pull=always --platform linux/amd64 ghcr.io/tashigg/tashi-depin-worker:0 run /home/worker/auth --unstable-update-download-path /tmp/tashi-depin-worker && docker logs -f tashi-depin-worker"
+end tell
+TASHI_SCRIPT
+sleep 1
+arrange_window "tashi" $((x1+30)) $y1 $upper_item_width $upper_height
+
+# 5. 启动dria（上层右侧，向右偏移半个身位，宽度缩小1/2，高度不变）
+echo "📦 启动 Dria 节点..."
+osascript -e 'tell app "Terminal" to do script "cd ~ && dkn-compute-launcher start"'
+sleep 1
+arrange_window "dkn-compute-launcher" $((x1+upper_item_width+spacing+upper_item_width/2)) $y1 $wai_width $wai_height
+
+# 6. 启动nexus（下层左侧，高度减小30px，向下移动5px）
+echo "📦 启动 Nexus 节点..."
+NEXUS_CONFIG="$HOME/.nexus/config.json"
+if [[ -f "$NEXUS_CONFIG" ]]; then
+    NODE_ID=$(jq -r .node_id "$NEXUS_CONFIG" 2>/dev/null)
+    if [[ -n "$NODE_ID" && "$NODE_ID" != "null" ]]; then
+        osascript -e "tell app \"Terminal\" to do script \"cd ~ && nexus-network start --node-id $NODE_ID || nexus-cli start --node-id $NODE_ID\""
+        sleep 1
+        arrange_window "nexus" $x1 $nexus_ritual_y $lower_item_width $nexus_ritual_height
+    else
+        echo "⚠️ 未找到 Nexus Node ID"
+    fi
+else
+    echo "⚠️ 未找到 Nexus 配置文件"
+fi
+
+# 7. 启动Ritual（下层右侧，高度减小30px，向下移动5px）
+echo "📦 启动 Ritual 节点..."
+RITUAL_PROJECT_DIR="$HOME/infernet-container-starter/deploy"
+if [[ -d "$RITUAL_PROJECT_DIR" ]]; then
+    osascript <<RITUAL_SCRIPT
+tell application "Terminal"
+    do script "cd $RITUAL_PROJECT_DIR && set -e && set -u && PROJECT_DIR=\"\\$HOME/infernet-container-starter/deploy\" && COMPOSE_FILE=\"\\$PROJECT_DIR/docker-compose.yaml\" && cd \"\\$PROJECT_DIR\" && jq '.chain.snapshot_sync.batch_size = 10 | .chain.snapshot_sync.starting_sub_id = 262500 | .chain.snapshot_sync.retry_delay = 60' config.json > config.json.tmp && mv config.json.tmp config.json && docker compose down || true && docker compose up node redis fluentbit"
+end tell
+RITUAL_SCRIPT
+    sleep 1
+    arrange_window "Ritual" $((x1+lower_item_width+spacing)) $nexus_ritual_y $lower_item_width $nexus_ritual_height
+else
+    echo "⚠️ 未找到 Ritual 项目目录: $RITUAL_PROJECT_DIR"
+fi
+
+echo "✅ 所有项目已启动完成！"
+echo "   - Docker已在后台运行"
+echo "   - Tashi 节点（替换 gensyn）"
+echo "   - Dria 节点"
+echo "   - Nexus 节点"
+echo "   - Ritual 节点"
+STARTALL_DIRECT_EOF
+  fi
+  chmod +x "$DESKTOP_DIR/startAll.command"
+  log "${GREEN}已创建 startAll.command${NC}"
+  
+  # 创建 clean_spotlight.command
+  if [[ "$HAS_RL_SWARM" == true ]] && [[ -f "$PROJECT_DIR/clean_spotlight.sh" ]]; then
+    # 使用 rl-swarm 中的 clean_spotlight.sh
+    cat > "$DESKTOP_DIR/clean_spotlight.command" <<EOF
+#!/bin/bash
+
+# 设置错误处理
+set -e
+
+# 捕获中断信号
+trap 'echo -e "\n\\033[33m⚠️ 脚本被中断，但终端将继续运行...\\033[0m"; exit 0' INT TERM
+
+# 进入项目目录
+cd "$PROJECT_DIR" || { echo "❌ 无法进入项目目录"; exit 1; }
+
+# 执行脚本
+echo "🚀 正在执行 clean_spotlight.sh..."
+./clean_spotlight.sh
+
+# 脚本执行完成后的提示
+echo -e "\\n\\033[32m✅ clean_spotlight.sh 执行完成\\033[0m"
+echo "按任意键关闭此窗口..."
+read -n 1 -s
+EOF
+  else
+    # 创建独立的 clean_spotlight 逻辑
+    cat > "$DESKTOP_DIR/clean_spotlight.command" <<'CLEAN_DIRECT_EOF'
+#!/bin/bash
+
+# 设置错误处理
+set -e
+
+# 捕获中断信号
+trap 'echo -e "\n\033[33m⚠️ 脚本被中断，但终端将继续运行...\033[0m"; exit 0' INT TERM
+
+echo "🧹 正在清理 Spotlight 索引..."
+
+# macOS 清理 Spotlight 索引
+if [[ "$OSTYPE" == "darwin"* ]]; then
+  echo "停止 Spotlight 索引..."
+  sudo mdutil -a -i off
+  
+  echo "删除 Spotlight 索引文件..."
+  sudo rm -rf /.Spotlight-V100
+  
+  echo "重建 Spotlight 索引..."
+  sudo mdutil -a -i on
+  
+  echo "✅ Spotlight 索引清理完成"
+else
+  echo "⚠️  此脚本仅适用于 macOS"
+fi
+
+echo "按任意键关闭此窗口..."
+read -n 1 -s
+CLEAN_DIRECT_EOF
+  fi
+  chmod +x "$DESKTOP_DIR/clean_spotlight.command"
+  log "${GREEN}已创建 clean_spotlight.command${NC}"
+  
+  log "${GREEN}所有桌面快捷方式已创建完成！${NC}"
+  
+  if [[ "$HAS_RL_SWARM" == false ]]; then
+    log "${YELLOW}提示：未检测到 rl-swarm 目录，快捷方式使用直接命令启动${NC}"
+    log "${YELLOW}如需配置 ritual.sh 的启动逻辑，请运行配置函数或手动编辑 ritual.command${NC}"
+  fi
+}
+
+# 配置 Ritual 启动逻辑（当没有 rl-swarm 时使用）
+configure_ritual_startup() {
+  if [[ "$OS_TYPE" != "macOS" ]]; then
+    return 0
+  fi
+  
+  DESKTOP_DIR="/Users/$(whoami)/Desktop"
+  RITUAL_CMD="$DESKTOP_DIR/ritual.command"
+  
+  if [[ ! -f "$RITUAL_CMD" ]]; then
+    log "${YELLOW}ritual.command 不存在，请先运行主脚本创建快捷方式${NC}"
+    return 1
+  fi
+  
+  log "${BLUE}配置 Ritual 启动逻辑...${NC}"
+  echo ""
+  echo -e "${YELLOW}请选择配置方式：${NC}"
+  echo "  1. 提供 ritual.sh 文件路径"
+  echo "  2. 提供 Ritual 启动命令"
+  echo "  3. 跳过配置"
+  echo ""
+  read -p "请选择 [1-3]: " config_choice
+  
+  case "$config_choice" in
+    1)
+      read -p "请输入 ritual.sh 文件的完整路径: " ritual_sh_path
+      if [[ -f "$ritual_sh_path" ]]; then
+        # 更新 ritual.command 使用提供的脚本
+        cat > "$RITUAL_CMD" <<EOF
+#!/bin/bash
+
+# 设置错误处理
+set -e
+
+# 捕获中断信号
+trap 'echo -e "\n\\033[33m⚠️ 脚本被中断，但终端将继续运行...\\033[0m"; exit 0' INT TERM
+
+# 执行提供的脚本
+echo "🚀 正在执行 Ritual 节点..."
+bash "$ritual_sh_path"
+
+# 脚本执行完成后的提示
+echo -e "\\n\\033[32m✅ Ritual 节点启动完成\\033[0m"
+echo "按任意键关闭此窗口..."
+read -n 1 -s
+EOF
+        chmod +x "$RITUAL_CMD"
+        log "${GREEN}已更新 ritual.command，使用提供的脚本文件${NC}"
+      else
+        log "${RED}文件不存在: $ritual_sh_path${NC}"
+        return 1
+      fi
+      ;;
+    2)
+      echo -e "${YELLOW}请输入 Ritual 启动命令（例如：ritual start 或 docker compose up ritual）${NC}"
+      read -p "启动命令: " ritual_cmd
+      if [[ -n "$ritual_cmd" ]]; then
+        # 更新 ritual.command 使用提供的命令
+        cat > "$RITUAL_CMD" <<EOF
+#!/bin/bash
+
+# 设置错误处理
+set -e
+
+# 捕获中断信号
+trap 'echo -e "\n\\033[33m⚠️ 脚本被中断，但终端将继续运行...\\033[0m"; exit 0' INT TERM
+
+# 执行启动命令
+echo "🚀 正在启动 Ritual 节点..."
+$ritual_cmd
+
+# 脚本执行完成后的提示
+echo -e "\\n\\033[32m✅ Ritual 节点启动完成\\033[0m"
+echo "按任意键关闭此窗口..."
+read -n 1 -s
+EOF
+        chmod +x "$RITUAL_CMD"
+        log "${GREEN}已更新 ritual.command，使用提供的启动命令${NC}"
+      else
+        log "${RED}启动命令不能为空${NC}"
+        return 1
+      fi
+      ;;
+    3)
+      log "${YELLOW}跳过配置${NC}"
+      return 0
+      ;;
+    *)
+      log "${RED}无效的选择${NC}"
+      return 1
+      ;;
+  esac
+}
+
+# 更新 startAll.sh 以包含 Tashi 启动逻辑
+update_startall_script() {
+  if [[ "$OS_TYPE" != "macOS" ]]; then
+    return 0
+  fi
+  
+  CURRENT_USER=$(whoami)
+  PROJECT_DIR="/Users/$CURRENT_USER/rl-swarm"
+  STARTALL_FILE="$PROJECT_DIR/startAll.sh"
+  
+  # 检查 rl-swarm 目录和 startAll.sh 是否存在
+  if [[ ! -d "$PROJECT_DIR" ]]; then
+    log "${YELLOW}未找到 rl-swarm 目录: $PROJECT_DIR${NC}"
+    log "${YELLOW}startAll.command 已创建独立版本，不依赖 rl-swarm${NC}"
+    return 0
+  fi
+  
+  if [[ ! -f "$STARTALL_FILE" ]]; then
+    log "${YELLOW}未找到 startAll.sh 文件: $STARTALL_FILE${NC}"
+    log "${YELLOW}startAll.command 已创建独立版本，不依赖 startAll.sh${NC}"
+    return 0
+  fi
+  
+  log "${BLUE}正在更新 startAll.sh 以添加 Tashi 启动逻辑...${NC}"
+  
+  # 检查是否已经包含 Tashi
+  if grep -q "tashi\|Tashi\|TASHI" "$STARTALL_FILE"; then
+    log "${GREEN}startAll.sh 已包含 Tashi 启动逻辑，跳过更新${NC}"
+    return 0
+  fi
+  
+  # 创建备份
+  cp "$STARTALL_FILE" "${STARTALL_FILE}.backup.$(date +%Y%m%d_%H%M%S)"
+  log "${GREEN}已创建 startAll.sh 备份${NC}"
+  
+  # 查找 gensyn 相关代码并替换为 Tashi
+  # 根据 startAll.sh，gensyn 在 #4 位置（上层左侧，距离左边界30px）
+  
+  if grep -q "gensyn\|Gensyn\|GENSYN" "$STARTALL_FILE"; then
+    log "${BLUE}检测到 gensyn 代码，将替换为 Tashi...${NC}"
+    
+    # 使用 Python 或 awk 进行更安全的替换（避免 sed 引号问题）
+    python3 <<PYTHON_REPLACE_EOF
+import re
+import sys
+
+file_path = "$STARTALL_FILE"
+
+try:
+    with open(file_path, 'r', encoding='utf-8') as f:
+        content = f.read()
+    
+    # 替换 gensyn.sh 启动命令为 Tashi Docker 命令
+    tashi_cmd = 'docker stop tashi-depin-worker 2>/dev/null; docker rm tashi-depin-worker 2>/dev/null; docker run -d -p 39065:39065 -p 127.0.0.1:9000:9000 --mount type=volume,src=tashi-depin-worker-auth,dst=/home/worker/auth --name tashi-depin-worker -e RUST_LOG="info,tashi_depin_worker=debug,tashi_depin_common=debug" --health-cmd="pgrep -f tashi-depin-worker || exit 1" --health-interval=30s --health-timeout=10s --health-retries=3 --restart=unless-stopped --pull=always --platform linux/amd64 ghcr.io/tashigg/tashi-depin-worker:0 run /home/worker/auth --unstable-update-download-path /tmp/tashi-depin-worker && docker logs -f tashi-depin-worker'
+    
+    # 替换包含 gensyn.sh 的 osascript 命令为 Tashi 命令
+    gensyn_pattern = r"osascript -e 'tell app \"Terminal\" to do script \".*gensyn\.sh.*\"'"
+    tashi_osascript = "osascript -e 'tell app \"Terminal\" to do script \"cd ~ && " + tashi_cmd.replace('"', '\\"') + "\"'"
+    content = re.sub(gensyn_pattern, tashi_osascript, content)
+    
+    # 也替换简单的 ./gensyn.sh
+    content = re.sub(r'\./gensyn\.sh', tashi_cmd, content)
+    
+    # 替换 arrange_window "gensyn" 为 arrange_window "tashi"
+    content = re.sub(r'arrange_window "gensyn"', 'arrange_window "tashi"', content)
+    
+    # 替换注释
+    content = re.sub(r'# 4\.\s*启动gensyn', '# 4. 启动 Tashi（替换原来的 gensyn）', content, flags=re.IGNORECASE)
+    
+    # 替换 echo 输出
+    content = re.sub(r'启动gensyn', '启动 Tashi 节点', content, flags=re.IGNORECASE)
+    content = re.sub(r'- gensyn', '- Tashi 节点（替换 gensyn）', content, flags=re.IGNORECASE)
+    
+    with open(file_path, 'w', encoding='utf-8') as f:
+        f.write(content)
+    
+    print("替换完成")
+    sys.exit(0)
+except Exception as e:
+    print(f"替换失败: {e}", file=sys.stderr)
+    sys.exit(1)
+PYTHON_REPLACE_EOF
+    
+    if [[ $? -eq 0 ]]; then
+      log "${GREEN}已替换 gensyn 为 Tashi${NC}"
+    else
+      log "${YELLOW}Python 替换失败，尝试使用 sed...${NC}"
+      # 备用方案：使用 sed（简单替换）
+      if [[ "$OS_TYPE" == "macOS" ]]; then
+        sed -i '' 's|./gensyn.sh|docker stop tashi-depin-worker 2>/dev/null; docker rm tashi-depin-worker 2>/dev/null; docker run -d -p 39065:39065 -p 127.0.0.1:9000:9000 --mount type=volume,src=tashi-depin-worker-auth,dst=/home/worker/auth --name tashi-depin-worker -e RUST_LOG="info,tashi_depin_worker=debug,tashi_depin_common=debug" --health-cmd="pgrep -f tashi-depin-worker || exit 1" --health-interval=30s --health-timeout=10s --health-retries=3 --restart=unless-stopped --pull=always --platform linux/amd64 ghcr.io/tashigg/tashi-depin-worker:0 run /home/worker/auth --unstable-update-download-path /tmp/tashi-depin-worker \&\& docker logs -f tashi-depin-worker|g' "$STARTALL_FILE"
+        sed -i '' 's/arrange_window "gensyn"/arrange_window "tashi"/g' "$STARTALL_FILE"
+        sed -i '' 's/# 4\. 启动gensyn/# 4. 启动 Tashi（替换原来的 gensyn）/g' "$STARTALL_FILE"
+      else
+        sed -i 's|./gensyn.sh|docker stop tashi-depin-worker 2>/dev/null; docker rm tashi-depin-worker 2>/dev/null; docker run -d -p 39065:39065 -p 127.0.0.1:9000:9000 --mount type=volume,src=tashi-depin-worker-auth,dst=/home/worker/auth --name tashi-depin-worker -e RUST_LOG="info,tashi_depin_worker=debug,tashi_depin_common=debug" --health-cmd="pgrep -f tashi-depin-worker || exit 1" --health-interval=30s --health-timeout=10s --health-retries=3 --restart=unless-stopped --pull=always --platform linux/amd64 ghcr.io/tashigg/tashi-depin-worker:0 run /home/worker/auth --unstable-update-download-path /tmp/tashi-depin-worker \&\& docker logs -f tashi-depin-worker|g' "$STARTALL_FILE"
+        sed -i 's/arrange_window "gensyn"/arrange_window "tashi"/g' "$STARTALL_FILE"
+        sed -i 's/# 4\. 启动gensyn/# 4. 启动 Tashi（替换原来的 gensyn）/g' "$STARTALL_FILE"
+      fi
+      log "${GREEN}已使用 sed 替换 gensyn 为 Tashi${NC}"
+    fi
+  else
+    log "${BLUE}未找到 gensyn 代码，将在 #4 位置添加 Tashi 启动逻辑...${NC}"
+    
+    # 使用 Python 在 #4 位置插入 Tashi 代码
+    python3 <<PYTHON_INSERT_EOF
+import sys
+
+file_path = "$STARTALL_FILE"
+tashi_code = '''# 4. 启动 Tashi（替换原来的 gensyn，上层左侧，距离左边界30px）
+osascript -e 'tell app "Terminal" to do script "cd ~ && docker stop tashi-depin-worker 2>/dev/null; docker rm tashi-depin-worker 2>/dev/null; docker run -d -p 39065:39065 -p 127.0.0.1:9000:9000 --mount type=volume,src=tashi-depin-worker-auth,dst=/home/worker/auth --name tashi-depin-worker -e RUST_LOG=\\"info,tashi_depin_worker=debug,tashi_depin_common=debug\\" --health-cmd=\\"pgrep -f tashi-depin-worker || exit 1\\" --health-interval=30s --health-timeout=10s --health-retries=3 --restart=unless-stopped --pull=always --platform linux/amd64 ghcr.io/tashigg/tashi-depin-worker:0 run /home/worker/auth --unstable-update-download-path /tmp/tashi-depin-worker && docker logs -f tashi-depin-worker"'
+sleep 1
+arrange_window "tashi" \$((x1+30)) \$y1 \$upper_item_width \$upper_height
+'''
+
+try:
+    with open(file_path, 'r', encoding='utf-8') as f:
+        lines = f.readlines()
+    
+    # 查找 #4 或 # 4. 的位置
+    insert_pos = -1
+    for i, line in enumerate(lines):
+        if '# 4.' in line or '#4.' in line:
+            insert_pos = i + 1
+            break
+    
+    # 如果找不到 #4，查找 # 6. 启动nexus 之前
+    if insert_pos == -1:
+        for i, line in enumerate(lines):
+            if '# 6.' in line and '启动nexus' in line:
+                insert_pos = i
+                break
+    
+    # 如果还是找不到，在文件末尾添加
+    if insert_pos == -1:
+        insert_pos = len(lines)
+    
+    # 插入 Tashi 代码
+    lines.insert(insert_pos, tashi_code + '\n')
+    
+    with open(file_path, 'w', encoding='utf-8') as f:
+        f.writelines(lines)
+    
+    print("插入完成")
+    sys.exit(0)
+except Exception as e:
+    print(f"插入失败: {e}", file=sys.stderr)
+    sys.exit(1)
+PYTHON_INSERT_EOF
+    
+    if [[ $? -eq 0 ]]; then
+      log "${GREEN}已在 startAll.sh 中添加 Tashi 启动逻辑${NC}"
+    else
+      log "${YELLOW}Python 插入失败，请手动编辑 startAll.sh${NC}"
+    fi
+  fi
+  
+  log "${GREEN}已更新 startAll.sh${NC}"
+  log "${YELLOW}请检查 startAll.sh 文件，确保 Tashi 窗口位置和配置正确${NC}"
+}
+
 # 主循环
 main() {
   if [[ "$OS_TYPE" == "Ubuntu" ]]; then
@@ -682,6 +1607,25 @@ main() {
   install_rust
   configure_rust_target
   get_node_id
+  
+  # 创建桌面快捷方式（仅在 macOS 上）
+  if [[ "$OS_TYPE" == "macOS" ]]; then
+    create_desktop_shortcuts
+    
+    # 检查是否需要配置 Ritual
+    PROJECT_DIR="/Users/$(whoami)/rl-swarm"
+    if [[ ! -d "$PROJECT_DIR" ]] || [[ ! -f "$PROJECT_DIR/ritual.sh" ]]; then
+      log "${YELLOW}未检测到 rl-swarm/ritual.sh，是否需要配置 Ritual 启动逻辑？${NC}"
+      read -p "是否现在配置？(y/n, 默认 n): " config_ritual
+      config_ritual=${config_ritual:-n}
+      if [[ "$config_ritual" =~ ^[Yy]$ ]]; then
+        configure_ritual_startup
+      fi
+    fi
+    
+    # 更新 startAll.sh 以包含 Tashi 启动逻辑
+    update_startall_script
+  fi
   
   # 首次启动节点
   log "${BLUE}首次启动 Nexus 节点...${NC}"
