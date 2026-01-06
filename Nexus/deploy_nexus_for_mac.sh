@@ -834,85 +834,7 @@ NEXUS_DIRECT_EOF
   chmod +x "$DESKTOP_DIR/nexus.command"
   log "${GREEN}已创建 nexus.command${NC}"
   
-  # 创建 ritual.command
-  if [[ "$HAS_RL_SWARM" == true ]] && [[ -f "$PROJECT_DIR/ritual.sh" ]]; then
-    # 使用 rl-swarm 中的 ritual.sh
-    cat > "$DESKTOP_DIR/ritual.command" <<EOF
-#!/bin/bash
-
-# 设置错误处理
-set -e
-
-# 捕获中断信号
-trap 'echo -e "\n\\033[33m⚠️ 脚本被中断，但终端将继续运行...\\033[0m"; exit 0' INT TERM
-
-# 进入项目目录
-cd "$PROJECT_DIR" || { echo "❌ 无法进入项目目录"; exit 1; }
-
-# 执行脚本
-echo "🚀 正在执行 ritual.sh..."
-./ritual.sh
-
-# 脚本执行完成后的提示
-echo -e "\\n\\033[32m✅ ritual.sh 执行完成\\033[0m"
-echo "按任意键关闭此窗口..."
-read -n 1 -s
-EOF
-  else
-    # 直接执行 ritual.sh 的完整逻辑（内嵌脚本内容）
-    cat > "$DESKTOP_DIR/ritual.command" <<'RITUAL_DIRECT_EOF'
-#!/bin/bash
-
-set -e
-set -u
-
-PROJECT_DIR="$HOME/infernet-container-starter/deploy"
-COMPOSE_FILE="$PROJECT_DIR/docker-compose.yaml"
-
-echo "🚀 切换到部署目录：$PROJECT_DIR"
-cd "$PROJECT_DIR" || { echo "❌ 目录不存在：$PROJECT_DIR"; exit 1; }
-
-# === 更新 deploy/config.json 配置参数 ===
-echo "ℹ️ 正在更新配置文件 config.json 中的参数..."
-if [[ -f "config.json" ]]; then
-  jq '.chain.snapshot_sync.batch_size = 10 | .chain.snapshot_sync.starting_sub_id = 262500 | .chain.snapshot_sync.retry_delay = 60' config.json > config.json.tmp
-  mv config.json.tmp config.json
-  
-  echo "✅ 已更新以下参数："
-  echo "- batch_size: 10"
-  echo "- starting_sub_id: 262500"
-  echo "- retry_delay: 60"
-else
-  echo "⚠️ 未找到 config.json 文件，跳过配置更新"
-fi
-
-echo "🔍 检查并更新 docker-compose.yml 中的 depends_on 设置..."
-
-# 检查并修改 depends_on 行
-if [[ -f "$COMPOSE_FILE" ]]; then
-  if grep -q 'depends_on: \[ redis, infernet-anvil \]' "$COMPOSE_FILE"; then
-    sed -i.bak 's/depends_on: \[ redis, infernet-anvil \]/depends_on: [ redis ]/' "$COMPOSE_FILE"
-    echo "✅ 已修改 depends_on 配置。备份文件保存在：docker-compose.yml.bak"
-  else
-    echo "✅ depends_on 配置已正确，无需修改。"
-  fi
-else
-  echo "⚠️ 未找到 docker-compose.yaml 文件"
-fi
-
-echo "🧹 停止并清理当前 Docker Compose 服务..."
-docker compose down || { echo "⚠️ docker compose down 执行失败，继续执行下一步..."; }
-
-echo "⚙️ 启动指定服务：node、redis、fluentbit"
-while true; do
-  docker compose up node redis fluentbit && break
-  echo "⚠️ 服务启动失败，5秒后重试..."
-  sleep 5
-done
-RITUAL_DIRECT_EOF
-  fi
-  chmod +x "$DESKTOP_DIR/ritual.command"
-  log "${GREEN}已创建 ritual.command${NC}"
+  # 不再创建 ritual.command（已删除 Ritual 功能）
   
   # 创建 tashi.command（参考 tashi_install.sh）
   cat > "$DESKTOP_DIR/tashi.command" <<'TASHI_EOF'
@@ -1247,27 +1169,13 @@ else
     echo "⚠️ 未找到 Nexus 配置文件"
 fi
 
-# 7. 启动Ritual（下层右侧，高度减小30px，向下移动5px）
-echo "📦 启动 Ritual 节点..."
-RITUAL_PROJECT_DIR="$HOME/infernet-container-starter/deploy"
-if [[ -d "$RITUAL_PROJECT_DIR" ]]; then
-    osascript <<RITUAL_SCRIPT
-tell application "Terminal"
-    do script "cd $RITUAL_PROJECT_DIR && set -e && set -u && PROJECT_DIR=\"\\$HOME/infernet-container-starter/deploy\" && COMPOSE_FILE=\"\\$PROJECT_DIR/docker-compose.yaml\" && cd \"\\$PROJECT_DIR\" && jq '.chain.snapshot_sync.batch_size = 10 | .chain.snapshot_sync.starting_sub_id = 262500 | .chain.snapshot_sync.retry_delay = 60' config.json > config.json.tmp && mv config.json.tmp config.json && docker compose down || true && docker compose up node redis fluentbit"
-end tell
-RITUAL_SCRIPT
-    sleep 1
-    arrange_window "Ritual" $((x1+lower_item_width+spacing)) $nexus_ritual_y $lower_item_width $nexus_ritual_height
-else
-    echo "⚠️ 未找到 Ritual 项目目录: $RITUAL_PROJECT_DIR"
-fi
+# Ritual 已删除，不再启动
 
 echo "✅ 所有项目已启动完成！"
 echo "   - Docker已在后台运行"
 echo "   - Tashi 节点（替换 gensyn）"
 echo "   - Dria 节点"
 echo "   - Nexus 节点"
-echo "   - Ritual 节点"
 STARTALL_DIRECT_EOF
   fi
   chmod +x "$DESKTOP_DIR/startAll.command"
@@ -1337,103 +1245,10 @@ CLEAN_DIRECT_EOF
   
   if [[ "$HAS_RL_SWARM" == false ]]; then
     log "${YELLOW}提示：未检测到 rl-swarm 目录，快捷方式使用直接命令启动${NC}"
-    log "${YELLOW}如需配置 ritual.sh 的启动逻辑，请运行配置函数或手动编辑 ritual.command${NC}"
   fi
 }
 
-# 配置 Ritual 启动逻辑（当没有 rl-swarm 时使用）
-configure_ritual_startup() {
-  if [[ "$OS_TYPE" != "macOS" ]]; then
-    return 0
-  fi
-  
-  DESKTOP_DIR="/Users/$(whoami)/Desktop"
-  RITUAL_CMD="$DESKTOP_DIR/ritual.command"
-  
-  if [[ ! -f "$RITUAL_CMD" ]]; then
-    log "${YELLOW}ritual.command 不存在，请先运行主脚本创建快捷方式${NC}"
-    return 1
-  fi
-  
-  log "${BLUE}配置 Ritual 启动逻辑...${NC}"
-  echo ""
-  echo -e "${YELLOW}请选择配置方式：${NC}"
-  echo "  1. 提供 ritual.sh 文件路径"
-  echo "  2. 提供 Ritual 启动命令"
-  echo "  3. 跳过配置"
-  echo ""
-  read -p "请选择 [1-3]: " config_choice
-  
-  case "$config_choice" in
-    1)
-      read -p "请输入 ritual.sh 文件的完整路径: " ritual_sh_path
-      if [[ -f "$ritual_sh_path" ]]; then
-        # 更新 ritual.command 使用提供的脚本
-        cat > "$RITUAL_CMD" <<EOF
-#!/bin/bash
-
-# 设置错误处理
-set -e
-
-# 捕获中断信号
-trap 'echo -e "\n\\033[33m⚠️ 脚本被中断，但终端将继续运行...\\033[0m"; exit 0' INT TERM
-
-# 执行提供的脚本
-echo "🚀 正在执行 Ritual 节点..."
-bash "$ritual_sh_path"
-
-# 脚本执行完成后的提示
-echo -e "\\n\\033[32m✅ Ritual 节点启动完成\\033[0m"
-echo "按任意键关闭此窗口..."
-read -n 1 -s
-EOF
-        chmod +x "$RITUAL_CMD"
-        log "${GREEN}已更新 ritual.command，使用提供的脚本文件${NC}"
-      else
-        log "${RED}文件不存在: $ritual_sh_path${NC}"
-        return 1
-      fi
-      ;;
-    2)
-      echo -e "${YELLOW}请输入 Ritual 启动命令（例如：ritual start 或 docker compose up ritual）${NC}"
-      read -p "启动命令: " ritual_cmd
-      if [[ -n "$ritual_cmd" ]]; then
-        # 更新 ritual.command 使用提供的命令
-        cat > "$RITUAL_CMD" <<EOF
-#!/bin/bash
-
-# 设置错误处理
-set -e
-
-# 捕获中断信号
-trap 'echo -e "\n\\033[33m⚠️ 脚本被中断，但终端将继续运行...\\033[0m"; exit 0' INT TERM
-
-# 执行启动命令
-echo "🚀 正在启动 Ritual 节点..."
-$ritual_cmd
-
-# 脚本执行完成后的提示
-echo -e "\\n\\033[32m✅ Ritual 节点启动完成\\033[0m"
-echo "按任意键关闭此窗口..."
-read -n 1 -s
-EOF
-        chmod +x "$RITUAL_CMD"
-        log "${GREEN}已更新 ritual.command，使用提供的启动命令${NC}"
-      else
-        log "${RED}启动命令不能为空${NC}"
-        return 1
-      fi
-      ;;
-    3)
-      log "${YELLOW}跳过配置${NC}"
-      return 0
-      ;;
-    *)
-      log "${RED}无效的选择${NC}"
-      return 1
-      ;;
-  esac
-}
+# Ritual 功能已删除，不再需要配置函数
 
 # 更新 startAll.sh 以包含 Tashi 启动逻辑
 update_startall_script() {
@@ -1508,6 +1323,12 @@ try:
     content = re.sub(r'启动gensyn', '启动 Tashi 节点', content, flags=re.IGNORECASE)
     content = re.sub(r'- gensyn', '- Tashi 节点（替换 gensyn）', content, flags=re.IGNORECASE)
     
+    # 删除 Ritual 相关代码
+    # 删除 # 7. 启动Ritual 部分（包括后续的 osascript 和 arrange_window）
+    content = re.sub(r'# 7\.\s*启动Ritual.*?arrange_window "Ritual".*?\n', '', content, flags=re.DOTALL | re.IGNORECASE)
+    # 删除 echo 中的 Ritual
+    content = re.sub(r'\s*- Ritual.*?\n', '', content, flags=re.IGNORECASE)
+    
     with open(file_path, 'w', encoding='utf-8') as f:
         f.write(content)
     
@@ -1525,12 +1346,18 @@ PYTHON_REPLACE_EOF
       # 备用方案：使用 sed（简单替换）
       if [[ "$OS_TYPE" == "macOS" ]]; then
         sed -i '' 's|./gensyn.sh|docker stop tashi-depin-worker 2>/dev/null; docker rm tashi-depin-worker 2>/dev/null; docker run -d -p 39065:39065 -p 127.0.0.1:9000:9000 --mount type=volume,src=tashi-depin-worker-auth,dst=/home/worker/auth --name tashi-depin-worker -e RUST_LOG="info,tashi_depin_worker=debug,tashi_depin_common=debug" --health-cmd="pgrep -f tashi-depin-worker || exit 1" --health-interval=30s --health-timeout=10s --health-retries=3 --restart=unless-stopped --pull=always --platform linux/amd64 ghcr.io/tashigg/tashi-depin-worker:0 run /home/worker/auth --unstable-update-download-path /tmp/tashi-depin-worker \&\& docker logs -f tashi-depin-worker|g' "$STARTALL_FILE"
-        sed -i '' 's/arrange_window "gensyn"/arrange_window "tashi"/g' "$STARTALL_FILE"
-        sed -i '' 's/# 4\. 启动gensyn/# 4. 启动 Tashi（替换原来的 gensyn）/g' "$STARTALL_FILE"
+      sed -i '' 's/arrange_window "gensyn"/arrange_window "tashi"/g' "$STARTALL_FILE"
+      sed -i '' 's/# 4\. 启动gensyn/# 4. 启动 Tashi（替换原来的 gensyn）/g' "$STARTALL_FILE"
+      # 删除 Ritual 相关代码
+      sed -i '' '/# 7\. 启动Ritual/,/arrange_window "Ritual"/d' "$STARTALL_FILE"
+      sed -i '' '/- Ritual/d' "$STARTALL_FILE"
       else
         sed -i 's|./gensyn.sh|docker stop tashi-depin-worker 2>/dev/null; docker rm tashi-depin-worker 2>/dev/null; docker run -d -p 39065:39065 -p 127.0.0.1:9000:9000 --mount type=volume,src=tashi-depin-worker-auth,dst=/home/worker/auth --name tashi-depin-worker -e RUST_LOG="info,tashi_depin_worker=debug,tashi_depin_common=debug" --health-cmd="pgrep -f tashi-depin-worker || exit 1" --health-interval=30s --health-timeout=10s --health-retries=3 --restart=unless-stopped --pull=always --platform linux/amd64 ghcr.io/tashigg/tashi-depin-worker:0 run /home/worker/auth --unstable-update-download-path /tmp/tashi-depin-worker \&\& docker logs -f tashi-depin-worker|g' "$STARTALL_FILE"
         sed -i 's/arrange_window "gensyn"/arrange_window "tashi"/g' "$STARTALL_FILE"
         sed -i 's/# 4\. 启动gensyn/# 4. 启动 Tashi（替换原来的 gensyn）/g' "$STARTALL_FILE"
+        # 删除 Ritual 相关代码
+        sed -i '/# 7\. 启动Ritual/,/arrange_window "Ritual"/d' "$STARTALL_FILE"
+        sed -i '/- Ritual/d' "$STARTALL_FILE"
       fi
       log "${GREEN}已使用 sed 替换 gensyn 为 Tashi${NC}"
     fi
@@ -1551,6 +1378,23 @@ arrange_window "tashi" \$((x1+30)) \$y1 \$upper_item_width \$upper_height
 try:
     with open(file_path, 'r', encoding='utf-8') as f:
         lines = f.readlines()
+    
+    # 删除 Ritual 相关代码
+    new_lines = []
+    skip_ritual = False
+    for i, line in enumerate(lines):
+        if '# 7.' in line and '启动Ritual' in line:
+            skip_ritual = True
+            continue
+        if skip_ritual and 'arrange_window "Ritual"' in line:
+            skip_ritual = False
+            continue
+        if skip_ritual:
+            continue
+        if '- Ritual' in line:
+            continue
+        new_lines.append(line)
+    lines = new_lines
     
     # 查找 #4 或 # 4. 的位置
     insert_pos = -1
@@ -1612,16 +1456,7 @@ main() {
   if [[ "$OS_TYPE" == "macOS" ]]; then
     create_desktop_shortcuts
     
-    # 检查是否需要配置 Ritual
-    PROJECT_DIR="/Users/$(whoami)/rl-swarm"
-    if [[ ! -d "$PROJECT_DIR" ]] || [[ ! -f "$PROJECT_DIR/ritual.sh" ]]; then
-      log "${YELLOW}未检测到 rl-swarm/ritual.sh，是否需要配置 Ritual 启动逻辑？${NC}"
-      read -p "是否现在配置？(y/n, 默认 n): " config_ritual
-      config_ritual=${config_ritual:-n}
-      if [[ "$config_ritual" =~ ^[Yy]$ ]]; then
-        configure_ritual_startup
-      fi
-    fi
+  # Ritual 功能已删除，不再需要配置
     
     # 更新 startAll.sh 以包含 Tashi 启动逻辑
     update_startall_script
