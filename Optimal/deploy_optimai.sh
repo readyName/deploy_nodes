@@ -241,27 +241,7 @@ else
     echo "✅ 登录成功！会话已保存"
 fi
 
-# 6. 启动节点
-echo ""
-echo "════════════════════════════════════════════"
-echo "6. 启动节点"
-echo "════════════════════════════════════════════"
-echo ""
-read -p "是否立即启动 OptimAI 节点? (y/n, 默认 y): " -n 1 -r
-echo ""
-
-if [[ $REPLY =~ ^[Yy]$ ]] || [[ -z "$REPLY" ]]; then
-    echo ""
-    echo "🚀 启动 OptimAI Core Node..."
-    echo "════════════════════════════════════════════"
-    echo ""
-    
-    optimai-cli node start
-else
-    echo ""
-    echo "📝 您可以稍后手动启动节点:"
-    echo "   optimai-cli node start"
-fi
+# 6. 启动节点（在创建快捷方式后统一启动）
 
 # 7. 创建桌面快捷方式
 create_desktop_shortcut() {
@@ -439,35 +419,11 @@ SCRIPT_EOF
 }
 
 # 创建桌面快捷方式
-    echo ""
+echo ""
 echo "7. 创建桌面快捷方式..."
 create_desktop_shortcut
 
-# 8. 完成
+# 8. 直接启动节点
 echo ""
-echo "════════════════════════════════════════════"
-echo "🏁 安装和设置流程已完成"
-echo "════════════════════════════════════════════"
-echo ""
-echo "🚀 下一步操作建议:"
-echo "   1) 首次登录并启动节点（如尚未登录或未启动）："
-echo "      optimai-cli auth login"
-echo "      optimai-cli node start"
-echo ""
-echo "   2) 之后重启/启动节点（会话已保存时）："
-echo "      直接运行: optimai-cli node start"
-echo ""
-echo "   3) 查看节点日志（确认运行状态）："
-echo "      optimai-cli node logs"
-echo ""
-echo "🖥️  桌面快捷方式:"
-echo "   双击桌面上的 Optimai.command 文件，将自动："
-echo "     - 检查并启动 Docker"
-echo "     - 检查登录状态，必要时提示登录"
-echo "     - 停止旧节点（如有）并重新启动节点"
-echo ""
-echo "📞 获取帮助:"
-echo "   官方文档: https://docs.optimai.network"
-echo "   社区支持: https://t.me/OptimAINetwork"
-echo ""
-echo "🌈 感谢使用 OptimAI Network！祝您使用愉快！"
+echo "🚀 启动节点..."
+optimai-cli node start
