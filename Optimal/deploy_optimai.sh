@@ -28,9 +28,13 @@ if ! command -v brew &> /dev/null; then
     echo ""
 fi
 
-# 1. 验证下载的文件
+# 1. 验证或下载文件
 echo ""
 echo "1. 验证文件..."
+
+# 确保 bin 目录存在
+mkdir -p "$BIN_DIR" || { echo "❌ 创建 bin/ 目录失败"; exit 1; }
+
 if [ -f "$BIN_DIR/optimai-cli" ]; then
     FILE_SIZE=$(wc -c < "$BIN_DIR/optimai-cli")
     if [ $FILE_SIZE -gt 10000000 ]; then  # 大于10MB
@@ -38,12 +42,65 @@ if [ -f "$BIN_DIR/optimai-cli" ]; then
         echo "✅ 文件存在且大小正常 (${FILE_SIZE_MB} MB)"
     else
         echo "⚠️  文件大小异常: $FILE_SIZE 字节"
-        echo "   文件可能不完整，请重新下载"
+        echo "   文件可能不完整，将重新下载..."
+        rm -f "$BIN_DIR/optimai-cli"
     fi
-else
-    echo "❌ 文件不存在: $BIN_DIR/optimai-cli"
-    echo "   请确保已经下载了 optimai-cli 文件到 bin/ 目录"
-    exit 1
+fi
+
+# 如果文件不存在，自动下载
+if [ ! -f "$BIN_DIR/optimai-cli" ]; then
+    echo "📥 文件不存在，开始自动下载 optimai-cli..."
+    
+    # 检测架构
+    ARCH=$(uname -m)
+    DOWNLOAD_URL="https://optimai.network/download/cli-node/mac"
+    
+    echo "   架构: $ARCH"
+    echo "   下载地址: $DOWNLOAD_URL"
+    echo "   保存位置: $BIN_DIR/optimai-cli"
+    echo ""
+    
+    # 下载文件
+    if command -v curl >/dev/null 2>&1; then
+        echo "   使用 curl 下载中..."
+        if curl -L -f --progress-bar -o "$BIN_DIR/optimai-cli" "$DOWNLOAD_URL"; then
+            echo "✅ 下载完成"
+        else
+            echo "❌ 下载失败，请检查网络连接"
+            echo "   手动下载命令: curl -L $DOWNLOAD_URL -o $BIN_DIR/optimai-cli"
+            exit 1
+        fi
+    elif command -v wget >/dev/null 2>&1; then
+        echo "   使用 wget 下载中..."
+        if wget --progress=bar:force -O "$BIN_DIR/optimai-cli" "$DOWNLOAD_URL" 2>&1; then
+            echo "✅ 下载完成"
+        else
+            echo "❌ 下载失败，请检查网络连接"
+            echo "   手动下载命令: wget -O $BIN_DIR/optimai-cli $DOWNLOAD_URL"
+            exit 1
+        fi
+    else
+        echo "❌ 未找到 curl 或 wget，无法自动下载"
+        echo "   请手动下载: curl -L $DOWNLOAD_URL -o $BIN_DIR/optimai-cli"
+        exit 1
+    fi
+    
+    # 验证下载的文件
+    if [ -f "$BIN_DIR/optimai-cli" ]; then
+        FILE_SIZE=$(wc -c < "$BIN_DIR/optimai-cli")
+        if [ $FILE_SIZE -gt 10000000 ]; then
+            FILE_SIZE_MB=$(echo "scale=2; $FILE_SIZE/1048576" | bc)
+            echo "✅ 文件下载成功，大小: ${FILE_SIZE_MB} MB"
+        else
+            echo "⚠️  下载的文件大小异常: $FILE_SIZE 字节"
+            echo "   文件可能不完整，请重新运行脚本"
+            rm -f "$BIN_DIR/optimai-cli"
+            exit 1
+        fi
+    else
+        echo "❌ 下载失败，文件不存在"
+        exit 1
+    fi
 fi
 
 # 2. 设置权限
