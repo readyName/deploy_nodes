@@ -40,20 +40,35 @@ fi
 # 2. 检查登录状态
 echo ""
 echo "🔍 检查登录状态..."
-if optimai-cli auth status >/dev/null 2>&1; then
+# 尝试执行需要认证的命令来检测登录状态
+TEMP_OUTPUT=$(optimai-cli node status 2>&1)
+LOGIN_CHECK=$?
+
+if [ $LOGIN_CHECK -eq 0 ]; then
     echo "✅ 已登录，跳过登录步骤"
 else
-    echo "🔐 需要登录..."
-    echo "等待输入邮箱进行登录..."
-    echo ""
-    optimai-cli auth login
-    
-    # 验证登录是否成功
-    if ! optimai-cli auth status >/dev/null 2>&1; then
-        echo "❌ 登录失败，请重新运行脚本"
-        exit 1
+    # 检查错误信息是否包含认证相关关键词
+    if echo "$TEMP_OUTPUT" | grep -qiE "not authenticated|auth login|未认证|未登录|Not authenticated"; then
+        echo "🔐 需要登录..."
+        echo "等待输入邮箱进行登录..."
+        echo ""
+        optimai-cli auth login
+        
+        # 登录后再次验证
+        echo ""
+        echo "🔍 验证登录状态..."
+        if optimai-cli node status >/dev/null 2>&1; then
+            echo "✅ 登录成功"
+        else
+            echo "⚠️  登录验证失败，但继续尝试启动节点"
+        fi
+    else
+        # 可能是其他错误（如节点未运行），也尝试登录确保已登录
+        echo "🔐 执行登录以确保已登录..."
+        echo "等待输入邮箱进行登录..."
+        echo ""
+        optimai-cli auth login
     fi
-    echo "✅ 登录成功"
 fi
 
 # 3. 检查 Docker
@@ -134,21 +149,37 @@ if ! command -v optimai-cli >/dev/null 2>&1; then
     exit 1
 fi
 
-# 检查登录状态
+# 检查登录状态（通过尝试需要认证的命令）
 echo "🔍 检查登录状态..."
-if ! optimai-cli auth status >/dev/null 2>&1; then
-    echo -e "${YELLOW}⚠️  未登录，需要先登录${RESET}"
-    echo "等待输入邮箱进行登录..."
-    echo ""
-    if ! optimai-cli auth login; then
-        echo -e "${RED}❌ 登录失败${RESET}"
-        echo ""
-        read -p "按任意键关闭..."
-        exit 1
-    fi
-    echo -e "${GREEN}✅ 登录成功${RESET}"
-else
+TEMP_OUTPUT=$(optimai-cli node status 2>&1)
+LOGIN_CHECK=$?
+
+if [ $LOGIN_CHECK -eq 0 ]; then
     echo -e "${GREEN}✅ 已登录${RESET}"
+else
+    # 检查错误信息是否包含认证相关
+    if echo "$TEMP_OUTPUT" | grep -qiE "not authenticated|auth login|未认证|未登录|Not authenticated"; then
+        echo -e "${YELLOW}⚠️  未登录，需要先登录${RESET}"
+        echo "等待输入邮箱进行登录..."
+        echo ""
+        if ! optimai-cli auth login; then
+            echo -e "${RED}❌ 登录失败${RESET}"
+            echo ""
+            read -p "按任意键关闭..."
+            exit 1
+        fi
+        echo -e "${GREEN}✅ 登录成功${RESET}"
+    else
+        echo -e "${YELLOW}⚠️  无法确定登录状态，尝试登录...${RESET}"
+        echo "等待输入邮箱进行登录..."
+        echo ""
+        optimai-cli auth login || {
+            echo -e "${RED}❌ 登录失败${RESET}"
+            echo ""
+            read -p "按任意键关闭..."
+            exit 1
+        }
+    fi
 fi
 
 # 检查 Docker
