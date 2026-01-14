@@ -23,7 +23,7 @@ if command -v optimai-cli >/dev/null 2>&1; then
     echo "   安装路径: $(which optimai-cli)"
     
     read -p "是否重新安装? (y/n, 默认 n): " -n 1 -r
-    echo ""
+echo ""
     if [[ ! $REPLY =~ ^[Yy]$ ]]; then
         echo "跳过安装，使用现有版本"
         SKIP_INSTALL=true
@@ -38,7 +38,7 @@ fi
 
 # 2. 下载并安装 CLI
 if [ "$SKIP_INSTALL" != "true" ]; then
-    echo ""
+echo ""
     echo "2. 下载 OptimAI CLI..."
     
     DOWNLOAD_URL="https://optimai.network/download/cli-node/mac"
@@ -69,9 +69,9 @@ if [ "$SKIP_INSTALL" != "true" ]; then
     else
         echo "❌ 未找到 curl 或 wget，无法自动下载"
         echo "   请手动下载: curl -L $DOWNLOAD_URL -o optimai-cli"
-        exit 1
-    fi
-    
+    exit 1
+fi
+
     # 验证下载的文件
     if [ -f "$TEMP_FILE" ]; then
         FILE_SIZE=$(wc -c < "$TEMP_FILE" 2>/dev/null || echo "0")
@@ -86,11 +86,11 @@ if [ "$SKIP_INSTALL" != "true" ]; then
         fi
     else
         echo "❌ 下载失败，文件不存在"
-        exit 1
-    fi
-    
+    exit 1
+fi
+
     # 3. 设置权限并安装到系统路径
-    echo ""
+echo ""
     echo "3. 安装到系统路径..."
     
     # 设置执行权限
@@ -117,15 +117,15 @@ if [ "$SKIP_INSTALL" != "true" ]; then
         else
             echo "❌ 安装失败，权限不足"
             rm -f "$TEMP_FILE"
-            exit 1
-        fi
+    exit 1
+fi
     else
         if mv "$TEMP_FILE" "$INSTALL_PATH"; then
             echo "✅ 安装成功"
         else
             echo "❌ 安装失败"
             rm -f "$TEMP_FILE"
-            exit 1
+    exit 1
         fi
     fi
     
@@ -146,17 +146,17 @@ echo ""
 echo "4. 检查 Docker..."
 if command -v docker >/dev/null 2>&1; then
     if docker info >/dev/null 2>&1; then
-        DOCKER_VERSION=$(docker --version | cut -d' ' -f3 | tr -d ',')
-        echo "✅ Docker 运行正常 (版本: $DOCKER_VERSION)"
+DOCKER_VERSION=$(docker --version | cut -d' ' -f3 | tr -d ',')
+echo "✅ Docker 运行正常 (版本: $DOCKER_VERSION)"
     else
         echo "⚠️  Docker 已安装但服务未运行"
         echo "   正在尝试启动 Docker Desktop..."
-        
+
         if [[ "$(uname)" == "Darwin" ]]; then
             open -a Docker 2>/dev/null || {
                 echo "   无法自动启动 Docker Desktop"
                 echo "   请手动启动: open -a Docker"
-                echo ""
+echo ""
                 read -p "按回车键继续（确认 Docker 已启动）..."
             }
             
@@ -173,17 +173,17 @@ if command -v docker >/dev/null 2>&1; then
                 waited=$((waited + 2))
                 echo -n "."
             done
-            echo ""
+    echo ""
             
             if ! docker info >/dev/null 2>&1; then
                 echo "❌ Docker 启动失败，请手动启动后重试"
-                exit 1
-            fi
-        else
-            echo "   请手动启动 Docker 服务"
             exit 1
         fi
+    else
+            echo "   请手动启动 Docker 服务"
+        exit 1
     fi
+fi
 else
     echo "❌ Docker 未安装"
     echo ""
@@ -205,32 +205,21 @@ echo "════════════════════════�
 echo "5. OptimAI 账户登录"
 echo "════════════════════════════════════════════"
 echo ""
-echo "📋 登录说明:"
-echo "• 需要 OptimAI 账户 (如果没有请先注册)"
-echo "• 会话会自动保存，无需重复登录"
-echo "• 登录信息存储在本地，安全加密"
-echo ""
-echo "🌐 账户准备:"
-echo "   注册地址: https://node.optimai.network/register"
-echo "   忘记密码: https://node.optimai.network/forgot-password"
-echo ""
 
 # 检查是否已登录
 if optimai-cli auth status >/dev/null 2>&1; then
-    echo "✅ 检测到已登录状态"
-    read -p "是否重新登录? (y/n, 默认 n): " -n 1 -r
-    echo ""
-    if [[ ! $REPLY =~ ^[Yy]$ ]]; then
-        echo "跳过登录，使用现有会话"
-        SKIP_LOGIN=true
-    else
-        SKIP_LOGIN=false
-    fi
+    echo "✅ 检测到已登录状态，跳过登录步骤"
+    echo "   会话已保存，下次启动节点无需重新登录"
 else
-    SKIP_LOGIN=false
-fi
-
-if [ "$SKIP_LOGIN" != "true" ]; then
+    echo "📋 登录说明:"
+    echo "• 需要 OptimAI 账户 (如果没有请先注册)"
+    echo "• 会话会自动保存，下次启动节点无需重新登录"
+    echo ""
+    echo "🌐 账户准备:"
+    echo "   注册地址: https://node.optimai.network/register"
+    echo "   忘记密码: https://node.optimai.network/forgot-password"
+    echo ""
+    
     read -p "按回车键开始登录 (按 Ctrl+C 取消)..."
     
     echo ""
@@ -239,29 +228,20 @@ if [ "$SKIP_LOGIN" != "true" ]; then
     echo "等待输入邮箱进行登录..."
     echo ""
     
-    if optimai-cli auth login; then
+    optimai-cli auth login
+    
+    # 验证登录是否成功
+    if ! optimai-cli auth status >/dev/null 2>&1; then
         echo ""
-        echo "✅ 登录成功！"
-    else
-        echo ""
-        echo "❌ 登录失败"
-        echo ""
-        echo "🔧 可能的原因:"
-        echo "   1. 账户或密码错误"
-        echo "   2. 网络连接问题"
-        echo "   3. 账户未激活或验证"
-        echo "   4. 服务器暂时不可用"
-        echo ""
-        echo "💡 解决方案:"
-        echo "   1. 确认网络连接"
-        echo "   2. 检查账户状态"
-        echo "   3. 稍后重试"
-        echo "   4. 访问: https://optimai.network/support"
+        echo "❌ 登录验证失败，请重新运行脚本或手动登录"
         exit 1
     fi
+    
+    echo ""
+    echo "✅ 登录成功！会话已保存"
 fi
 
-# 6. 询问是否启动节点
+# 6. 启动节点
 echo ""
 echo "════════════════════════════════════════════"
 echo "6. 启动节点"
@@ -277,48 +257,193 @@ if [[ $REPLY =~ ^[Yy]$ ]] || [[ -z "$REPLY" ]]; then
     echo ""
     
     optimai-cli node start
-    
-    EXIT_CODE=$?
-    
-    if [ $EXIT_CODE -eq 0 ]; then
-        echo ""
-        echo "🎉 节点启动成功！"
-        echo ""
-        echo "📊 节点信息:"
-        echo "   名称: $(hostname)"
-        echo "   类型: Core Node"
-        echo ""
-        echo "🎯 管理命令:"
-        echo "   停止节点: optimai-cli node stop"
-        echo "   查看状态: optimai-cli node status"
-        echo "   查看日志: optimai-cli node logs"
-        echo ""
-        echo "📈 监控节点:"
-        echo "   按 Ctrl+C 停止"
-        echo "   保持终端窗口打开"
-    else
-        echo ""
-        echo "❌ 节点启动失败 (退出码: $EXIT_CODE)"
-        echo ""
-        echo "🔧 故障排除:"
-        echo "   1. 检查 Docker 是否运行: docker ps"
-        echo "   2. 确保网络连接正常"
-        echo "   3. 重新登录: optimai-cli auth login"
-        echo ""
-        echo "📞 获取帮助: https://docs.optimai.network/troubleshooting"
-    fi
 else
     echo ""
     echo "📝 您可以稍后手动启动节点:"
-    echo "   启动节点: optimai-cli node start"
-    echo "   查看状态: optimai-cli node status"
-    echo "   停止节点: optimai-cli node stop"
-    echo "   查看日志: optimai-cli node logs"
-    echo ""
-    echo "💡 提示: 节点需要保持运行才能参与网络"
+    echo "   optimai-cli node start"
 fi
 
-# 7. 完成
+# 7. 创建桌面快捷方式
+create_desktop_shortcut() {
+    local desktop_path=""
+    
+    # 检测桌面路径
+    if [[ -n "$HOME" ]]; then
+        if [[ "$(uname)" == "Darwin" ]]; then
+            desktop_path="$HOME/Desktop"
+        elif [[ -d "$HOME/Desktop" ]]; then
+            desktop_path="$HOME/Desktop"
+        elif [[ -d "$HOME/桌面" ]]; then
+            desktop_path="$HOME/桌面"
+        fi
+    fi
+    
+    if [[ -z "$desktop_path" || ! -d "$desktop_path" ]]; then
+        echo "⚠️  桌面目录未找到，跳过快捷方式创建"
+        return
+    fi
+    
+    local shortcut_file="$desktop_path/Optimai.command"
+    
+    # 创建快捷方式文件 - 直接启动/重启节点
+    cat > "$shortcut_file" <<'SCRIPT_EOF'
+#!/bin/bash
+
+# OptimAI Core Node 启动/重启脚本
+
+# 设置颜色
+GREEN="\033[32m"
+RED="\033[31m"
+YELLOW="\033[33m"
+CYAN="\033[36m"
+RESET="\033[0m"
+
+# 清屏
+clear
+
+# 显示标题
+echo -e "${CYAN}╔══════════════════════════════════════════╗${RESET}"
+echo -e "${CYAN}║      OptimAI Core Node 启动/重启          ║${RESET}"
+echo -e "${CYAN}║      时间: $(date '+%Y-%m-%d %H:%M:%S')            ║${RESET}"
+echo -e "${CYAN}╚══════════════════════════════════════════╝${RESET}"
+echo ""
+
+# 检查 optimai-cli 是否安装
+if ! command -v optimai-cli >/dev/null 2>&1; then
+    echo -e "${RED}❌ OptimAI CLI 未安装${RESET}"
+    echo "   请先运行安装脚本安装 OptimAI CLI"
+    echo ""
+    read -p "按任意键关闭此窗口..."
+    exit 1
+fi
+
+# 检查 Docker
+echo "🔍 检查 Docker..."
+if ! command -v docker >/dev/null 2>&1; then
+    echo -e "${RED}❌ Docker 未安装${RESET}"
+    echo "   请先安装 Docker Desktop for macOS"
+    echo ""
+    read -p "按任意键关闭此窗口..."
+    exit 1
+fi
+
+if ! docker info >/dev/null 2>&1; then
+    echo -e "${YELLOW}⚠️  Docker 服务未运行${RESET}"
+    echo "   正在尝试启动 Docker Desktop..."
+    open -a Docker 2>/dev/null || {
+        echo -e "${RED}无法自动启动 Docker Desktop${RESET}"
+        echo "   请手动启动: open -a Docker"
+        echo ""
+        read -p "按任意键关闭此窗口..."
+        exit 1
+    }
+    
+    echo "   等待 Docker 启动..."
+    waited=0
+    max_wait=60
+    while [ $waited -lt $max_wait ]; do
+        if docker info >/dev/null 2>&1; then
+            echo -e "${GREEN}✅ Docker 已启动${RESET}"
+            break
+        fi
+        sleep 2
+        waited=$((waited + 2))
+        echo -n "."
+    done
+    echo ""
+    
+    if ! docker info >/dev/null 2>&1; then
+        echo -e "${RED}❌ Docker 启动超时${RESET}"
+        echo ""
+        read -p "按任意键关闭此窗口..."
+        exit 1
+    fi
+else
+    echo -e "${GREEN}✅ Docker 运行正常${RESET}"
+fi
+
+# 检查登录状态
+echo ""
+echo "🔍 检查登录状态..."
+if ! optimai-cli auth status >/dev/null 2>&1; then
+    echo -e "${RED}❌ 未登录${RESET}"
+    echo ""
+    echo "需要先登录才能启动节点"
+    echo "等待输入邮箱进行登录..."
+    echo ""
+    
+    if ! optimai-cli auth login; then
+        echo ""
+        echo -e "${RED}❌ 登录失败${RESET}"
+        echo ""
+        read -p "按任意键关闭此窗口..."
+        exit 1
+    fi
+    
+    echo ""
+    echo -e "${GREEN}✅ 登录成功！${RESET}"
+else
+    echo -e "${GREEN}✅ 已登录（会话已保存）${RESET}"
+fi
+
+# 停止旧节点（如果存在）
+echo ""
+echo "🛑 检查并停止旧节点..."
+if optimai-cli node stop >/dev/null 2>&1; then
+    echo -e "${GREEN}✅ 已停止旧节点${RESET}"
+    sleep 2
+else
+    echo -e "${YELLOW}ℹ️  未发现运行中的节点${RESET}"
+fi
+
+# 启动节点
+echo ""
+echo -e "${CYAN}════════════════════════════════════════════${RESET}"
+echo -e "${CYAN}启动 OptimAI 节点${RESET}"
+echo -e "${CYAN}════════════════════════════════════════════${RESET}"
+echo ""
+
+if optimai-cli node start; then
+    echo ""
+    echo -e "${GREEN}✅ 节点启动成功！${RESET}"
+    echo ""
+    echo "📊 节点信息:"
+    echo "   名称: $(hostname)"
+    echo "   类型: Core Node"
+    echo ""
+    echo "💡 提示:"
+    echo "   • 节点正在运行中"
+    echo "   • 关闭此窗口不会停止节点"
+    echo "   • 如需停止节点，请运行: optimai-cli node stop"
+    echo "   • 查看日志: optimai-cli node logs"
+    echo ""
+else
+    echo ""
+    echo -e "${RED}❌ 节点启动失败${RESET}"
+    echo ""
+    echo "🔧 故障排除:"
+    echo "   1. 检查 Docker 是否运行: docker ps"
+    echo "   2. 确保网络连接正常"
+    echo "   3. 重新登录: optimai-cli auth login"
+    echo ""
+fi
+
+echo "按任意键关闭此窗口..."
+read -n 1 -s
+SCRIPT_EOF
+
+    # 设置执行权限
+    chmod +x "$shortcut_file"
+    
+    echo "✅ 桌面快捷方式已创建: $shortcut_file"
+}
+
+# 创建桌面快捷方式
+    echo ""
+echo "7. 创建桌面快捷方式..."
+create_desktop_shortcut
+
+# 8. 完成
 echo ""
 echo "════════════════════════════════════════════"
 echo "🏁 安装和设置流程已完成"
@@ -331,6 +456,9 @@ echo "   optimai-cli node stop     # 停止节点"
 echo "   optimai-cli node logs     # 查看日志"
 echo "   optimai-cli auth login    # 重新登录"
 echo "   optimai-cli --version     # 查看版本"
+echo ""
+echo "🖥️  桌面快捷方式:"
+echo "   双击桌面上的 Optimai.command 文件即可打开管理工具"
 echo ""
 echo "📞 获取帮助:"
 echo "   官方文档: https://docs.optimai.network"
