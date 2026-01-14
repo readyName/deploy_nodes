@@ -37,7 +37,7 @@ else
     echo "✅ 安装完成"
 fi
 
-# 2. 检查登录状态
+# 2. 检查登录状态并登录
 echo ""
 echo "🔍 检查登录状态..."
 # 尝试执行需要认证的命令来检测登录状态
@@ -50,24 +50,40 @@ else
     # 检查错误信息是否包含认证相关关键词
     if echo "$TEMP_OUTPUT" | grep -qiE "not authenticated|auth login|未认证|未登录|Not authenticated"; then
         echo "🔐 需要登录..."
-        echo "等待输入邮箱进行登录..."
-        echo ""
-        optimai-cli auth login
-        
-        # 登录后再次验证
-        echo ""
-        echo "🔍 验证登录状态..."
-        if optimai-cli node status >/dev/null 2>&1; then
-            echo "✅ 登录成功"
-        else
-            echo "⚠️  登录验证失败，但继续尝试启动节点"
-        fi
     else
-        # 可能是其他错误（如节点未运行），也尝试登录确保已登录
         echo "🔐 执行登录以确保已登录..."
-        echo "等待输入邮箱进行登录..."
+    fi
+    
+    echo "等待输入邮箱进行登录..."
+    echo ""
+    
+    # 执行登录命令并捕获退出码
+    if ! optimai-cli auth login; then
         echo ""
-        optimai-cli auth login
+        echo "❌ 登录命令执行失败"
+        exit 1
+    fi
+    
+    # 登录后必须验证成功
+    echo ""
+    echo "🔍 验证登录状态..."
+    sleep 2  # 等待一下让登录状态生效
+    VERIFY_OUTPUT=$(optimai-cli node status 2>&1)
+    VERIFY_CHECK=$?
+    
+    if [ $VERIFY_CHECK -eq 0 ]; then
+        echo "✅ 登录成功"
+    else
+        # 再次检查错误信息
+        if echo "$VERIFY_OUTPUT" | grep -qiE "not authenticated|auth login|未认证|未登录|Not authenticated"; then
+            echo "❌ 登录验证失败，仍然未登录"
+            echo "   错误信息: $VERIFY_OUTPUT"
+            echo "   请重新运行脚本并确保登录成功"
+            exit 1
+        else
+            echo "⚠️  登录完成，但验证时出现其他错误: $VERIFY_OUTPUT"
+            echo "   继续尝试启动节点..."
+        fi
     fi
 fi
 
@@ -251,7 +267,27 @@ echo ""
 echo "📝 创建桌面启动脚本..."
 create_desktop_shortcut
 
-# 5. 启动节点
+# 5. 启动节点前再次确认登录状态
+echo ""
+echo "🔍 启动前确认登录状态..."
+START_CHECK_OUTPUT=$(optimai-cli node status 2>&1)
+START_CHECK=$?
+
+if [ $START_CHECK -ne 0 ] && echo "$START_CHECK_OUTPUT" | grep -qiE "not authenticated|auth login|未认证|未登录|Not authenticated"; then
+    echo "❌ 检测到未登录状态，需要重新登录"
+    echo "等待输入邮箱进行登录..."
+    echo ""
+    optimai-cli auth login
+    
+    # 再次验证
+    if ! optimai-cli node status >/dev/null 2>&1; then
+        echo "❌ 登录失败，无法启动节点"
+        exit 1
+    fi
+    echo "✅ 登录成功"
+fi
+
+# 启动节点
 echo ""
 echo "🚀 启动节点..."
 optimai-cli node start
