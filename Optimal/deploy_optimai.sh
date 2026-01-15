@@ -193,7 +193,12 @@ echo ""
 echo "📝 创建桌面启动脚本..."
 create_desktop_shortcut
 
-# 5. 启动节点
+# 5. 停止旧节点（如果存在）
+echo ""
+echo "🛑 停止旧节点（如果存在）..."
+optimai-cli node stop >/dev/null 2>&1 && sleep 2 || true
+
+# 6. 启动节点
 echo ""
 echo "🚀 启动节点..."
 optimai-cli node start
