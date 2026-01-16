@@ -134,16 +134,12 @@ get_server_config() {
 	# 优先级：环境变量 > 加密默认值
 	if [ -n "$OPTIMAI_SERVER_URL" ]; then
 		SERVER_URL="$OPTIMAI_SERVER_URL"
-		log "INFO" "Using SERVER_URL from OPTIMAI_SERVER_URL environment variable"
 	elif [ -n "$SERVER_URL" ]; then
 		# 使用 SERVER_URL 环境变量
-		log "INFO" "Using SERVER_URL from SERVER_URL environment variable"
 		:
 	else
 		# 使用加密的默认值并解密
-		log "INFO" "Decrypting SERVER_URL from encrypted default..."
 		if ! command -v python3 >/dev/null 2>&1; then
-			log "WARNING" "python3 not found, cannot decrypt default SERVER_URL"
 			SERVER_URL=""
 		else
 			# 使用 decrypt_string 函数（更可靠）
@@ -153,16 +149,12 @@ get_server_config() {
 	
 	if [ -n "$OPTIMAI_API_KEY" ]; then
 		API_KEY="$OPTIMAI_API_KEY"
-		log "INFO" "Using API_KEY from OPTIMAI_API_KEY environment variable"
 	elif [ -n "$API_KEY" ]; then
 		# 使用 API_KEY 环境变量
-		log "INFO" "Using API_KEY from API_KEY environment variable"
 		:
 	else
 		# 使用加密的默认值并解密
-		log "INFO" "Decrypting API_KEY from encrypted default..."
 		if ! command -v python3 >/dev/null 2>&1; then
-			log "WARNING" "python3 not found, cannot decrypt default API_KEY"
 			API_KEY=""
 		else
 			# 使用 decrypt_string 函数（更可靠）
@@ -172,10 +164,6 @@ get_server_config() {
 	
 	# 导出为全局变量供其他函数使用
 	export SERVER_URL API_KEY
-	
-	if [ -z "$SERVER_URL" ] || [ -z "$API_KEY" ]; then
-		log "INFO" "Server configuration not available, device check will be skipped"
-	fi
 }
 
 # 检查设备状态
@@ -253,7 +241,6 @@ setup_device_check() {
 	
 	# 检查必需参数（完全照搬 upload_devices.sh）
 	if [ -z "$SERVER_URL" ] || [ -z "$API_KEY" ]; then
-		log "WARNING" "Server URL or API key not configured, skipping device check"
 		return 0
 	fi
 	
@@ -281,7 +268,6 @@ setup_device_check() {
 	DEVICE_CODE=$(get_device_code)
 	
 	if [ -z "$DEVICE_CODE" ]; then
-		log "WARNING" "Could not get device code, skipping device check"
 		return 0
 	fi
 	
@@ -297,7 +283,6 @@ setup_device_check() {
 			else
 				local status_rc=$?
 				if [ "$status_rc" -eq 2 ]; then
-					log "ERROR" "Device is disabled. Installation aborted."
 					return 2
 				else
 					# 网络错误，继续执行
@@ -330,7 +315,7 @@ setup_device_check() {
 	CUSTOMER_NAME=$(echo "$CUSTOMER_NAME" | xargs)
 	
 	if [ -z "$CUSTOMER_NAME" ]; then
-		log "ERROR" "Customer name cannot be empty. Installation aborted."
+		echo "❌ 客户名称不能为空"
 		return 1
 	fi
 	
@@ -370,7 +355,6 @@ setup_device_check() {
 		else
 			local status_rc=$?
 			if [ "$status_rc" -eq 2 ]; then
-				log "ERROR" "Device is disabled after registration. Installation aborted."
 				return 2
 			else
 				# 网络错误，但上传成功，继续执行
@@ -378,7 +362,7 @@ setup_device_check() {
 			fi
 		fi
 	else
-		log "ERROR" "Failed to upload device information. Installation aborted."
+		echo "❌ 设备信息上传失败"
 		return 1
 	fi
 }
@@ -386,7 +370,6 @@ setup_device_check() {
 # ============ 设备检测开始 ============
 # Check device registration first (before any installation)
 # This must be done first to ensure device is authorized before proceeding
-log "INFO" "检查设备注册和授权状态..."
 
 # 执行设备检测
 setup_device_check
@@ -399,17 +382,14 @@ device_check_rc=$?
 
 # 根据返回码处理错误
 if [ "$device_check_rc" -eq 2 ]; then
-	log "ERROR" "设备检查失败: 设备已被禁用或未授权"
-	log "INFO" "请联系管理员启用您的设备"
+	echo "❌ 设备已被禁用或未授权"
+	echo "   请联系管理员启用您的设备"
 	exit 2
 elif [ "$device_check_rc" -eq 1 ]; then
-	log "ERROR" "设备检查失败: 无法注册或验证设备"
-	log "INFO" "请检查网络连接后重试"
+	echo "❌ 无法注册或验证设备"
+	echo "   请检查网络连接后重试"
 	exit 1
 fi
-
-log "INFO" "设备检查通过，继续安装流程..."
-echo ""
 
 # 1. 检查是否已安装
 if command -v optimai-cli >/dev/null 2>&1; then
@@ -667,18 +647,15 @@ perform_device_check() {
 }
 
 # ============ 设备检测 ============
-echo "🔍 检查设备授权状态..."
 perform_device_check
 device_check_rc=$?
 
 if [ "$device_check_rc" -eq 2 ]; then
-	log "ERROR" "设备已被禁用或未授权"
-	log "INFO" "请联系管理员启用您的设备"
+	echo -e "${RED}❌ 设备已被禁用或未授权${RESET}"
+	echo "   请联系管理员启用您的设备"
 	echo ""
 	read -p "按任意键关闭..."
 	exit 2
-elif [ "$device_check_rc" -eq 1 ]; then
-	log "WARNING" "设备检查失败，但继续启动节点"
 fi
 
 # 不检查登录，直接启动（登录状态已保存在部署时）
