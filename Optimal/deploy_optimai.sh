@@ -321,26 +321,54 @@ if ! command -v optimai-cli >/dev/null 2>&1; then
     echo "📥 下载 OptimAI CLI..."
     echo "   系统架构: $ARCH"
     
-    # 下载文件
+    # 下载文件（带重试机制）
     TEMP_FILE="/tmp/optimai-cli-$$"
-    curl -L -f https://optimai.network/download/cli-node/mac -o "$TEMP_FILE"
+    DOWNLOAD_URL="https://optimai.network/download/cli-node/mac"
+    MAX_RETRIES=3
+    RETRY_COUNT=0
+    DOWNLOAD_SUCCESS=0
     
-    if [ ! -f "$TEMP_FILE" ]; then
-        echo "❌ 下载失败"
-        exit 1
-    fi
-    
-    # 验证文件完整性（检查文件大小和是否为有效的 Mach-O 文件）
-    FILE_SIZE=$(wc -c < "$TEMP_FILE" 2>/dev/null || echo "0")
-    if [ "$FILE_SIZE" -lt 1000000 ]; then
-        echo "❌ 下载的文件大小异常: $FILE_SIZE 字节，可能下载不完整"
+    while [ $RETRY_COUNT -lt $MAX_RETRIES ] && [ $DOWNLOAD_SUCCESS -eq 0 ]; do
+        if [ $RETRY_COUNT -gt 0 ]; then
+            echo "   重试下载 ($RETRY_COUNT/$MAX_RETRIES)..."
+        fi
+        
+        # 清理之前的临时文件
         rm -f "$TEMP_FILE"
-        exit 1
-    fi
+        
+        # 下载文件
+        if curl -L -f --progress-bar "$DOWNLOAD_URL" -o "$TEMP_FILE" 2>&1; then
+            # 验证文件是否存在且大小合理
+            if [ -f "$TEMP_FILE" ]; then
+                FILE_SIZE=$(wc -c < "$TEMP_FILE" 2>/dev/null || echo "0")
+                if [ "$FILE_SIZE" -lt 1000000 ]; then
+                    echo "   ⚠️  文件大小异常: $FILE_SIZE 字节，可能下载不完整"
+                    RETRY_COUNT=$((RETRY_COUNT + 1))
+                    continue
+                fi
+                
+                # 验证是否为有效的 Mach-O 文件
+                if file "$TEMP_FILE" 2>/dev/null | grep -qE "Mach-O|executable"; then
+                    DOWNLOAD_SUCCESS=1
+                else
+                    echo "   ⚠️  文件格式无效，重试..."
+                    RETRY_COUNT=$((RETRY_COUNT + 1))
+                    continue
+                fi
+            else
+                echo "   ⚠️  下载失败，重试..."
+                RETRY_COUNT=$((RETRY_COUNT + 1))
+                continue
+            fi
+        else
+            echo "   ⚠️  下载失败，重试..."
+            RETRY_COUNT=$((RETRY_COUNT + 1))
+            continue
+        fi
+    done
     
-    # 验证是否为有效的 Mach-O 文件
-    if ! file "$TEMP_FILE" 2>/dev/null | grep -qE "Mach-O|executable"; then
-        echo "❌ 下载的文件不是有效的可执行文件"
+    if [ $DOWNLOAD_SUCCESS -eq 0 ]; then
+        echo "❌ 下载失败，已重试 $MAX_RETRIES 次"
         rm -f "$TEMP_FILE"
         exit 1
     fi
@@ -355,11 +383,48 @@ if ! command -v optimai-cli >/dev/null 2>&1; then
     
     # 验证安装
     if command -v optimai-cli >/dev/null 2>&1; then
-        echo "✅ 安装完成"
+        # 再次验证文件是否可执行
+        INSTALLED_PATH=$(which optimai-cli)
+        if [ -f "$INSTALLED_PATH" ] && file "$INSTALLED_PATH" 2>/dev/null | grep -qE "Mach-O|executable"; then
+            # 尝试执行一个简单命令验证
+            if optimai-cli --version >/dev/null 2>&1 || optimai-cli --help >/dev/null 2>&1; then
+                echo "✅ 安装完成"
+            else
+                echo "❌ 安装的文件无法执行，尝试重新下载..."
+                sudo rm -f "$INSTALLED_PATH"
+                # 重新执行下载逻辑（简化版）
+                TEMP_FILE="/tmp/optimai-cli-retry-$$"
+                curl -L -f https://optimai.network/download/cli-node/mac -o "$TEMP_FILE"
+                if [ -f "$TEMP_FILE" ] && [ "$(wc -c < "$TEMP_FILE" 2>/dev/null || echo "0")" -gt 1000000 ]; then
+                    chmod +x "$TEMP_FILE"
+                    sudo mv "$TEMP_FILE" /usr/local/bin/optimai-cli
+                else
+                    echo "❌ 重新下载失败"
+                    exit 1
+                fi
+            fi
+        else
+            echo "❌ 安装的文件格式无效"
+            exit 1
+        fi
     else
         echo "❌ 安装验证失败"
         exit 1
     fi
+fi
+
+# 最终验证 CLI 是否可用
+if ! command -v optimai-cli >/dev/null 2>&1; then
+    echo "❌ OptimAI CLI 未正确安装"
+    exit 1
+fi
+
+# 验证 CLI 文件是否有效
+CLI_PATH=$(which optimai-cli)
+if [ ! -f "$CLI_PATH" ] || ! file "$CLI_PATH" 2>/dev/null | grep -qE "Mach-O|executable"; then
+    echo "❌ OptimAI CLI 文件损坏，请重新运行脚本"
+    sudo rm -f "$CLI_PATH" 2>/dev/null || true
+    exit 1
 fi
 
 # 2. 登录
