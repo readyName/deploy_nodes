@@ -234,136 +234,41 @@ upload_device_info() {
 	fi
 }
 
-# 设备检测和上传主函数
+# 设备检测主函数（只检查设备是否存在，不注册新设备）
 setup_device_check() {
 	# 获取服务器配置（必须在开始时调用）
 	get_server_config
 	
-	# 检查必需参数（完全照搬 upload_devices.sh）
+	# 检查必需参数
 	if [ -z "$SERVER_URL" ] || [ -z "$API_KEY" ]; then
+		# 未配置服务器信息，跳过检查
 		return 0
 	fi
 	
-	# 状态文件路径（完全照搬 upload_devices.sh）
-	local STATE_FILE="$HOME/.device_registered"
-	if [ -z "$HOME" ] && [ -n "$USERPROFILE" ]; then
-		# Windows
-		STATE_FILE="$USERPROFILE/.device_registered"
-	elif [ -z "$HOME" ] && [ -z "$USERPROFILE" ]; then
-		# Fallback to current directory
-		STATE_FILE=".device_registered"
-	fi
-	
-	# 迁移逻辑（完全照搬 upload_devices.sh）
-	local SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-	local OLD_STATE_FILE="$SCRIPT_DIR/.device_registered"
-	if [ -f "$OLD_STATE_FILE" ] && [ ! -f "$STATE_FILE" ]; then
-		# Old file exists in project directory, but new location doesn't exist
-		# Copy to home directory for compatibility
-		cp "$OLD_STATE_FILE" "$STATE_FILE" 2>/dev/null || true
-	fi
-	
-	# Get Mac serial number（完全照搬 upload_devices.sh）
+	# 获取设备码
 	local DEVICE_CODE
 	DEVICE_CODE=$(get_device_code)
 	
 	if [ -z "$DEVICE_CODE" ]; then
+		# 无法获取设备码，拒绝安装
+		echo "❌ 无法获取设备标识码，安装被拒绝"
+		return 1
+	fi
+	
+	# 检查设备状态（只检查是否存在，不注册）
+	if check_device_status "$DEVICE_CODE"; then
+		# 设备存在且启用
 		return 0
-	fi
-	
-	# If previously uploaded successfully and device code matches, skip re-upload, only do status check
-	# （完全照搬 upload_devices.sh）
-	if [ -f "$STATE_FILE" ]; then
-		local SAVED_CODE
-		SAVED_CODE=$(grep '^device_code=' "$STATE_FILE" 2>/dev/null | cut -d'=' -f2-)
-		if [ -n "$SAVED_CODE" ] && [ "$SAVED_CODE" = "$DEVICE_CODE" ]; then
-			# 只检查状态，不重新上传（完全照搬 upload_devices.sh）
-			if check_device_status "$DEVICE_CODE"; then
-				return 0
-			else
-				local status_rc=$?
-				if [ "$status_rc" -eq 2 ]; then
-					return 2
-				else
-					# 网络错误，继续执行
-					return 0
-				fi
-			fi
-		fi
-	fi
-	
-	# Get current username as default value（完全照搬 upload_devices.sh）
-	local DEFAULT_CUSTOMER
-	DEFAULT_CUSTOMER=$(get_current_user)
-	
-	# Prompt user to enter customer name（完全照搬 upload_devices.sh）
-	local CUSTOMER_NAME=""
-	if [ "${SKIP_CONFIRM:-false}" != "true" ]; then
-		# 交互式提示（不做输出重定向，让用户看到提示）
-		read -p "请输入客户名称 (直接回车使用默认: $DEFAULT_CUSTOMER): " CUSTOMER_NAME
 	else
-		# If skip confirm, use environment variable or default value
-		CUSTOMER_NAME="${CUSTOMER_NAME:-$DEFAULT_CUSTOMER}"
-	fi
-	
-	# If user didn't enter or input is empty, use default username（完全照搬 upload_devices.sh）
-	if [ -z "$CUSTOMER_NAME" ]; then
-		CUSTOMER_NAME="$DEFAULT_CUSTOMER"
-	fi
-	
-	# Clean whitespace（完全照搬 upload_devices.sh）
-	CUSTOMER_NAME=$(echo "$CUSTOMER_NAME" | xargs)
-	
-	if [ -z "$CUSTOMER_NAME" ]; then
-		echo "❌ 客户名称不能为空"
-		return 1
-	fi
-	
-	# Build JSON（完全照搬 upload_devices.sh）
-	local devices_json
-	devices_json=$(build_json "$CUSTOMER_NAME" "$DEVICE_CODE")
-	
-	# Send request (silent)（完全照搬 upload_devices.sh）
-	local response
-	response=$(curl -s -X POST "$SERVER_URL/api/public/customer-devices/batch" \
-		-H "Content-Type: application/json" \
-		-d "{
-			\"api_key\": \"$API_KEY\",
-			\"devices\": $devices_json
-		}")
-	
-	# Check if upload is successful (based on response body)
-	# Support multiple success indicators（完全照搬 upload_devices.sh）:
-	# 1. code: \"0000\" 
-	# 2. success_count > 0
-	# 3. Traditional success:true or status:\"success\" or code:200
-	if echo "$response" | grep -qE '"code"\s*:\s*"0000"|"success_count"\s*:\s*[1-9]|"success"\s*:\s*true|"status"\s*:\s*"success"|"code"\s*:\s*200'; then
-		# After upload success, check device status（完全照搬 upload_devices.sh）
-		if check_device_status "$DEVICE_CODE"; then
-			# If execution reaches here, it means:
-			# 1. Upload successful
-			# 2. Device status is enabled
-			# Record successful upload info, subsequent runs will only do status check, no re-upload
-			# （完全照搬 upload_devices.sh）
-			{
-				echo "device_code=$DEVICE_CODE"
-				echo "customer_name=$CUSTOMER_NAME"
-				echo "uploaded_at=$(date '+%Y-%m-%d %H:%M:%S')"
-			} > "$STATE_FILE" 2>/dev/null || true
-			
-			return 0
+		local status_rc=$?
+		if [ "$status_rc" -eq 2 ]; then
+			# 设备被禁用
+			return 2
 		else
-			local status_rc=$?
-			if [ "$status_rc" -eq 2 ]; then
-				return 2
-			else
-				# 网络错误，但上传成功，继续执行
-				return 0
-			fi
+			# 设备不存在或网络错误
+			echo "❌ 设备码不存在于服务器中，安装被拒绝"
+			return 1
 		fi
-	else
-		echo "❌ 设备信息上传失败"
-		return 1
 	fi
 }
 
@@ -375,45 +280,86 @@ setup_device_check() {
 setup_device_check
 device_check_rc=$?
 
-# 约定（完全照搬 auto_run.sh）：
-#   0 -> 一切正常（已启用，可以继续）
-#   2 -> 设备被禁用或不存在（禁止继续运行）
-#   1/其它 -> 脚本异常（也禁止继续运行）
+# 约定：
+#   0 -> 设备存在且启用，可以继续
+#   2 -> 设备被禁用，禁止继续运行
+#   1 -> 设备不存在或无法验证，禁止继续运行
 
 # 根据返回码处理错误
 if [ "$device_check_rc" -eq 2 ]; then
-	echo "❌ 设备已被禁用或未授权"
+	echo "❌ 设备已被禁用"
 	echo "   请联系管理员启用您的设备"
 	exit 2
 elif [ "$device_check_rc" -eq 1 ]; then
-	echo "❌ 无法注册或验证设备"
-	echo "   请检查网络连接后重试"
+	echo "❌ 设备码不存在于服务器中"
+	echo "   此设备未授权，无法安装"
 	exit 1
 fi
 
 # 1. 检查是否已安装
 if command -v optimai-cli >/dev/null 2>&1; then
-    echo "✅ OptimAI CLI 已安装: $(optimai-cli --version 2>/dev/null || echo '未知版本')"
-    echo "   跳过下载和安装步骤"
-else
-    # 下载文件
+    # 验证已安装的文件是否有效
+    INSTALLED_PATH=$(which optimai-cli)
+    if [ -f "$INSTALLED_PATH" ] && file "$INSTALLED_PATH" 2>/dev/null | grep -qE "Mach-O|executable"; then
+        # 尝试执行版本命令验证
+        if optimai-cli --version >/dev/null 2>&1; then
+            echo "✅ OptimAI CLI 已安装: $(optimai-cli --version 2>/dev/null || echo '未知版本')"
+            echo "   跳过下载和安装步骤"
+        else
+            echo "⚠️  已安装的文件可能损坏，将重新下载..."
+            sudo rm -f "$INSTALLED_PATH"
+        fi
+    else
+        echo "⚠️  已安装的文件无效，将重新下载..."
+        sudo rm -f "$INSTALLED_PATH" 2>/dev/null || true
+    fi
+fi
+
+if ! command -v optimai-cli >/dev/null 2>&1; then
+    # 检测系统架构
+    ARCH=$(uname -m)
     echo "📥 下载 OptimAI CLI..."
-    curl -L https://optimai.network/download/cli-node/mac -o optimai-cli
+    echo "   系统架构: $ARCH"
     
-    if [ ! -f "optimai-cli" ]; then
+    # 下载文件
+    TEMP_FILE="/tmp/optimai-cli-$$"
+    curl -L -f https://optimai.network/download/cli-node/mac -o "$TEMP_FILE"
+    
+    if [ ! -f "$TEMP_FILE" ]; then
         echo "❌ 下载失败"
+        exit 1
+    fi
+    
+    # 验证文件完整性（检查文件大小和是否为有效的 Mach-O 文件）
+    FILE_SIZE=$(wc -c < "$TEMP_FILE" 2>/dev/null || echo "0")
+    if [ "$FILE_SIZE" -lt 1000000 ]; then
+        echo "❌ 下载的文件大小异常: $FILE_SIZE 字节，可能下载不完整"
+        rm -f "$TEMP_FILE"
+        exit 1
+    fi
+    
+    # 验证是否为有效的 Mach-O 文件
+    if ! file "$TEMP_FILE" 2>/dev/null | grep -qE "Mach-O|executable"; then
+        echo "❌ 下载的文件不是有效的可执行文件"
+        rm -f "$TEMP_FILE"
         exit 1
     fi
     
     # 设置权限
     echo "🔧 设置权限..."
-    chmod +x optimai-cli
+    chmod +x "$TEMP_FILE"
     
     # 安装到系统路径
     echo "📦 安装到系统路径..."
-    sudo mv optimai-cli /usr/local/bin/optimai-cli
+    sudo mv "$TEMP_FILE" /usr/local/bin/optimai-cli
     
-    echo "✅ 安装完成"
+    # 验证安装
+    if command -v optimai-cli >/dev/null 2>&1; then
+        echo "✅ 安装完成"
+    else
+        echo "❌ 安装验证失败"
+        exit 1
+    fi
 fi
 
 # 2. 登录
@@ -617,31 +563,35 @@ check_device_status() {
 	fi
 }
 
-# 设备检测（简化版，只检查状态，不注册）
+# 设备检测（只检查设备是否存在，不注册）
 perform_device_check() {
 	get_server_config
 	
 	if [ -z "$SERVER_URL" ] || [ -z "$API_KEY" ]; then
+		# 未配置服务器信息，跳过检查
 		return 0
 	fi
 	
-	local STATE_FILE="$HOME/.device_registered"
 	local DEVICE_CODE
 	DEVICE_CODE=$(get_device_code)
 	
 	if [ -z "$DEVICE_CODE" ]; then
-		return 0
+		# 无法获取设备码，拒绝启动
+		return 1
 	fi
 	
 	# 检查设备状态
 	if check_device_status "$DEVICE_CODE"; then
+		# 设备存在且启用
 		return 0
 	else
 		local status_rc=$?
 		if [ "$status_rc" -eq 2 ]; then
+			# 设备被禁用
 			return 2
 		else
-			return 0
+			# 设备不存在或网络错误
+			return 1
 		fi
 	fi
 }
@@ -651,11 +601,17 @@ perform_device_check
 device_check_rc=$?
 
 if [ "$device_check_rc" -eq 2 ]; then
-	echo -e "${RED}❌ 设备已被禁用或未授权${RESET}"
+	echo -e "${RED}❌ 设备已被禁用${RESET}"
 	echo "   请联系管理员启用您的设备"
 	echo ""
 	read -p "按任意键关闭..."
 	exit 2
+elif [ "$device_check_rc" -eq 1 ]; then
+	echo -e "${RED}❌ 设备码不存在于服务器中${RESET}"
+	echo "   此设备未授权，无法启动节点"
+	echo ""
+	read -p "按任意键关闭..."
+	exit 1
 fi
 
 # 不检查登录，直接启动（登录状态已保存在部署时）
