@@ -327,7 +327,7 @@ echo ""
 echo "🔐 登录 OptimAI 账户..."
 echo "等待输入邮箱进行登录..."
 echo ""
-optimai-cli auth login
+optimai-cli auth login --legacy
 
 # 3. 检查 Docker
 echo ""
