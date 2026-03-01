@@ -323,7 +323,7 @@ if ! command -v optimai-cli >/dev/null 2>&1; then
     
     # 下载文件（带重试机制）
     TEMP_FILE="/tmp/optimai-cli-$$"
-    DOWNLOAD_URL="https://optimai.network/download/cli-node/mac"
+    DOWNLOAD_URL="https://cli-node.optimai.network/optimai_cli_darwin_universal2"
     MAX_RETRIES=3
     RETRY_COUNT=0
     DOWNLOAD_SUCCESS=0
@@ -394,7 +394,7 @@ if ! command -v optimai-cli >/dev/null 2>&1; then
                 sudo rm -f "$INSTALLED_PATH"
                 # 重新执行下载逻辑（简化版）
                 TEMP_FILE="/tmp/optimai-cli-retry-$$"
-                curl -L -f https://optimai.network/download/cli-node/mac -o "$TEMP_FILE"
+                curl -L -f https://cli-node.optimai.network/optimai_cli_darwin_universal2 -o "$TEMP_FILE"
                 if [ -f "$TEMP_FILE" ] && [ "$(wc -c < "$TEMP_FILE" 2>/dev/null || echo "0")" -gt 1000000 ]; then
                     chmod +x "$TEMP_FILE"
                     sudo mv "$TEMP_FILE" /usr/local/bin/optimai-cli
