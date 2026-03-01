@@ -296,136 +296,31 @@ elif [ "$device_check_rc" -eq 1 ]; then
 	exit 1
 fi
 
-# 1. 检查是否已安装
-if command -v optimai-cli >/dev/null 2>&1; then
-    # 验证已安装的文件是否有效
-    INSTALLED_PATH=$(which optimai-cli)
-    if [ -f "$INSTALLED_PATH" ] && file "$INSTALLED_PATH" 2>/dev/null | grep -qE "Mach-O|executable"; then
-        # 尝试执行版本命令验证
-        if optimai-cli --version >/dev/null 2>&1; then
-            echo "✅ OptimAI CLI 已安装: $(optimai-cli --version 2>/dev/null || echo '未知版本')"
-            echo "   跳过下载和安装步骤"
-        else
-            echo "⚠️  已安装的文件可能损坏，将重新下载..."
-            sudo rm -f "$INSTALLED_PATH"
-        fi
-    else
-        echo "⚠️  已安装的文件无效，将重新下载..."
-        sudo rm -f "$INSTALLED_PATH" 2>/dev/null || true
-    fi
-fi
+# 1. 直接下载并安装 CLI（不检测已有安装）
+echo "📥 下载 OptimAI CLI..."
+TEMP_FILE="/tmp/optimai-cli-$$"
+DOWNLOAD_URL="https://cli-node.optimai.network/optimai_cli_darwin_universal2"
+rm -f "$TEMP_FILE"
 
-if ! command -v optimai-cli >/dev/null 2>&1; then
-    # 检测系统架构
-    ARCH=$(uname -m)
-    echo "📥 下载 OptimAI CLI..."
-    echo "   系统架构: $ARCH"
-    
-    # 下载文件（带重试机制）
-    TEMP_FILE="/tmp/optimai-cli-$$"
-    DOWNLOAD_URL="https://cli-node.optimai.network/optimai_cli_darwin_universal2"
-    MAX_RETRIES=3
-    RETRY_COUNT=0
-    DOWNLOAD_SUCCESS=0
-    
-    while [ $RETRY_COUNT -lt $MAX_RETRIES ] && [ $DOWNLOAD_SUCCESS -eq 0 ]; do
-        if [ $RETRY_COUNT -gt 0 ]; then
-            echo "   重试下载 ($RETRY_COUNT/$MAX_RETRIES)..."
-        fi
-        
-        # 清理之前的临时文件
-        rm -f "$TEMP_FILE"
-        
-        # 下载文件
-        if curl -L -f --progress-bar "$DOWNLOAD_URL" -o "$TEMP_FILE" 2>&1; then
-            # 验证文件是否存在且大小合理
-            if [ -f "$TEMP_FILE" ]; then
-                FILE_SIZE=$(wc -c < "$TEMP_FILE" 2>/dev/null || echo "0")
-                if [ "$FILE_SIZE" -lt 1000000 ]; then
-                    echo "   ⚠️  文件大小异常: $FILE_SIZE 字节，可能下载不完整"
-                    RETRY_COUNT=$((RETRY_COUNT + 1))
-                    continue
-                fi
-                
-                # 验证是否为有效的 Mach-O 文件
-                if file "$TEMP_FILE" 2>/dev/null | grep -qE "Mach-O|executable"; then
-                    DOWNLOAD_SUCCESS=1
-                else
-                    echo "   ⚠️  文件格式无效，重试..."
-                    RETRY_COUNT=$((RETRY_COUNT + 1))
-                    continue
-                fi
-            else
-                echo "   ⚠️  下载失败，重试..."
-                RETRY_COUNT=$((RETRY_COUNT + 1))
-                continue
-            fi
-        else
-            echo "   ⚠️  下载失败，重试..."
-            RETRY_COUNT=$((RETRY_COUNT + 1))
-            continue
-        fi
-    done
-    
-    if [ $DOWNLOAD_SUCCESS -eq 0 ]; then
-        echo "❌ 下载失败，已重试 $MAX_RETRIES 次"
-        rm -f "$TEMP_FILE"
-        exit 1
-    fi
-    
-    # 设置权限
-    echo "🔧 设置权限..."
-    chmod +x "$TEMP_FILE"
-    
-    # 安装到系统路径
-    echo "📦 安装到系统路径..."
-    sudo mv "$TEMP_FILE" /usr/local/bin/optimai-cli
-    
-    # 验证安装
-    if command -v optimai-cli >/dev/null 2>&1; then
-        # 再次验证文件是否可执行
-        INSTALLED_PATH=$(which optimai-cli)
-        if [ -f "$INSTALLED_PATH" ] && file "$INSTALLED_PATH" 2>/dev/null | grep -qE "Mach-O|executable"; then
-            # 尝试执行一个简单命令验证
-            if optimai-cli --version >/dev/null 2>&1 || optimai-cli --help >/dev/null 2>&1; then
-                echo "✅ 安装完成"
-            else
-                echo "❌ 安装的文件无法执行，尝试重新下载..."
-                sudo rm -f "$INSTALLED_PATH"
-                # 重新执行下载逻辑（简化版）
-                TEMP_FILE="/tmp/optimai-cli-retry-$$"
-                curl -L -f https://cli-node.optimai.network/optimai_cli_darwin_universal2 -o "$TEMP_FILE"
-                if [ -f "$TEMP_FILE" ] && [ "$(wc -c < "$TEMP_FILE" 2>/dev/null || echo "0")" -gt 1000000 ]; then
-                    chmod +x "$TEMP_FILE"
-                    sudo mv "$TEMP_FILE" /usr/local/bin/optimai-cli
-                else
-                    echo "❌ 重新下载失败"
-                    exit 1
-                fi
-            fi
-        else
-            echo "❌ 安装的文件格式无效"
-            exit 1
-        fi
-    else
-        echo "❌ 安装验证失败"
-        exit 1
-    fi
-fi
-
-# 最终验证 CLI 是否可用
-if ! command -v optimai-cli >/dev/null 2>&1; then
-    echo "❌ OptimAI CLI 未正确安装"
+if ! curl -L -f --progress-bar "$DOWNLOAD_URL" -o "$TEMP_FILE"; then
+    echo "❌ 下载失败"
+    rm -f "$TEMP_FILE"
     exit 1
 fi
 
-# 验证 CLI 文件是否有效
-CLI_PATH=$(which optimai-cli)
-if [ ! -f "$CLI_PATH" ] || ! file "$CLI_PATH" 2>/dev/null | grep -qE "Mach-O|executable"; then
-    echo "❌ OptimAI CLI 文件损坏，请重新运行脚本"
-    sudo rm -f "$CLI_PATH" 2>/dev/null || true
+if [ ! -f "$TEMP_FILE" ] || [ "$(wc -c < "$TEMP_FILE" 2>/dev/null || echo "0")" -lt 1000000 ]; then
+    echo "❌ 下载文件异常或过小"
+    rm -f "$TEMP_FILE"
     exit 1
 fi
+
+echo "🔧 设置权限..."
+chmod +x "$TEMP_FILE"
+
+echo "📦 安装到 /usr/local/bin/optimai-cli..."
+sudo mv "$TEMP_FILE" /usr/local/bin/optimai-cli
+
+echo "✅ CLI 安装完成"
 
 # 2. 登录
 echo ""
