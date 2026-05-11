@@ -84,12 +84,11 @@ install_rust() {
         exit 1
     fi
     
-    # 关键修复：验证并加载 Rust 环境
+    # 验证并加载 Rust 环境
     if [[ -f "$HOME/.cargo/env" ]]; then
         source "$HOME/.cargo/env"
     fi
     
-    # 再次验证 rustc 是否可用
     if ! command -v rustc &> /dev/null; then
         export PATH="$HOME/.cargo/bin:$PATH"
     fi
@@ -207,40 +206,35 @@ configure_rpc() {
 }
 
 prepare_keypair() {
-    local use_old="n"
-    # 如果从配置中读到了密钥路径，且文件存在，询问是否更改
+    # 如果从记忆文件中读到了 KEYPAIR_PATH 且文件存在，则询问是否更改
     if [[ -n "${KEYPAIR_PATH}" && -f "${KEYPAIR_PATH}" ]]; then
         echo -e "${BLUE}检测到上次使用的钱包密钥文件：${GREEN}${KEYPAIR_PATH}${NC}"
-        read -rp "是否更改？(y/n，默认 n): " use_old
-        use_old=${use_old:-n}
-        if [[ "$use_old" != "y" ]]; then
-            keypair_path="$KEYPAIR_PATH"
-            log "沿用上次钱包密钥文件。"
-            # 提取公钥
-            local pubkey
-            pubkey=$(solana-keygen pubkey "$keypair_path" 2>/dev/null)
-            if [[ -z "$pubkey" ]]; then
-                log "${RED}无法从密钥文件读取公钥，文件可能损坏。请重新配置钱包。${NC}"
-                # 强制重新配置
-                prepare_new_keypair
-                return
+        local pubkey
+        pubkey=$(solana-keygen pubkey "$KEYPAIR_PATH" 2>/dev/null)
+        if [[ -n "$pubkey" ]]; then
+            echo -e "${BLUE}对应公钥：${GREEN}${pubkey}${NC}"
+            read -rp "是否更改？(y/n，默认 n): " use_old
+            use_old=${use_old:-n}
+            if [[ "$use_old" != "y" ]]; then
+                keypair_path="$KEYPAIR_PATH"
+                PUBKEY="$pubkey"
+                log "沿用上次钱包。地址：$PUBKEY"
+                KEYPAIR_PATH="$keypair_path"
+                return 0
             fi
-            PUBKEY="$pubkey"
-            log "你的 Solana 地址（公钥）：$PUBKEY"
-            KEYPAIR_PATH="$keypair_path"
-            return 0
+        else
+            log "${YELLOW}无法从记忆文件读取公钥，将强制重新配置钱包。${NC}"
         fi
-    fi
-
-    # 如果配置文件中的密钥文件不存在，也强制重新设置
-    if [[ -n "${KEYPAIR_PATH}" && ! -f "${KEYPAIR_PATH}" ]]; then
+    elif [[ -n "${KEYPAIR_PATH}" && ! -f "${KEYPAIR_PATH}" ]]; then
         log "${RED}上次保存的密钥文件 ${KEYPAIR_PATH} 不存在，请重新配置钱包。${NC}"
     fi
 
-    prepare_new_keypair
+    # 记忆文件不存在或密钥文件丢失 → 引导用户重新配置
+    echo -e "${BLUE}未找到有效的记忆钱包，请配置 Solana 密钥对。${NC}"
+    guide_keypair_setup
 }
 
-prepare_new_keypair() {
+guide_keypair_setup() {
     local keypair_input
     echo -e "${BLUE}你是否有现成的 Solana 密钥对文件（JSON 格式）？${NC}"
     echo -e "通常路径为：~/.config/solana/id.json"
@@ -255,24 +249,37 @@ prepare_new_keypair() {
         fi
         log "使用现有密钥文件：$keypair_path"
     else
+        # 生成新钱包
         log "开始生成新 Solana 钱包..."
         install_solana_cli
         local wallet_dir="$HOME/.config/solana"
         mkdir -p "$wallet_dir"
         keypair_path="$wallet_dir/id.json"
         if [[ -f "$keypair_path" ]]; then
-            read -rp "文件 $keypair_path 已存在，是否覆盖？(y/n) [n]: " overwrite
-            if [[ ! "$overwrite" =~ ^[Yy]$ ]]; then
-                log "请备份旧钱包后重试，或选择使用现有文件。"
+            # 既然用户选择了生成，但文件已存在，询问是否覆盖或直接使用
+            echo -e "${YELLOW}文件 $keypair_path 已存在。${NC}"
+            echo -e "  - 输入 y 覆盖并生成新钱包（旧钱包将被替换）"
+            echo -e "  - 输入 n 或直接回车，使用现有文件"
+            read -rp "是否覆盖？(y/n，默认 n): " overwrite
+            overwrite=${overwrite:-n}
+            if [[ "$overwrite" =~ ^[Yy]$ ]]; then
+                solana-keygen new --outfile "$keypair_path" --no-bip39-passphrase
+                if [[ $? -ne 0 ]]; then
+                    log "${RED}钱包生成失败。${NC}"
+                    exit 1
+                fi
+                log "新钱包已生成。请务必保管好你的助记词！"
+            else
+                log "使用现有钱包文件。"
+            fi
+        else
+            solana-keygen new --outfile "$keypair_path" --no-bip39-passphrase
+            if [[ $? -ne 0 ]]; then
+                log "${RED}钱包生成失败。${NC}"
                 exit 1
             fi
+            log "新钱包已生成。请务必保管好你的助记词！"
         fi
-        solana-keygen new --outfile "$keypair_path" --no-bip39-passphrase
-        if [[ $? -ne 0 ]]; then
-            log "${RED}钱包生成失败。${NC}"
-            exit 1
-        fi
-        log "新钱包已生成。请务必保管好你的助记词！"
     fi
 
     local pubkey
