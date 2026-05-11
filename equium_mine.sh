@@ -55,6 +55,24 @@ detect_os() {
     log "macOS 环境检测通过。"
 }
 
+#======================== 修复 Cargo 镜像协议 ========================#
+fix_cargo_registry_protocol() {
+    local cargo_config="$HOME/.cargo/config.toml"
+    if [[ -f "$cargo_config" ]]; then
+        # 检查文件中是否有 git:// 协议（只针对镜像地址）
+        if grep -q 'git://' "$cargo_config"; then
+            log "检测到 Cargo 配置中包含旧版 git:// 协议，正在自动替换为 https://..."
+            # 使用 macOS 的 sed -i '' 时，注意转义
+            sed -i '' 's|git://|https://|g' "$cargo_config"
+            log "已将 git:// 替换为 https://。"
+        else
+            log "Cargo 配置未使用 git:// 协议，跳过修复。"
+        fi
+    else
+        log "未发现自定义 Cargo 配置文件，将使用默认源。"
+    fi
+}
+
 #======================== 依赖安装 ========================#
 install_rust() {
     if check_command rustc; then
@@ -104,7 +122,7 @@ build_equium() {
     log "开始编译（可能需要几分钟）..."
     cargo build --release
     if [[ $? -ne 0 ]]; then
-        log "${RED}编译失败！请检查上方错误信息。常见原因：缺少 system 库（如 cmake/protobuf），请先用 brew install cmake protobuf 安装。${NC}"
+        log "${RED}编译失败！请检查上方错误信息。如果提示网络错误，可能是 Cargo 源不稳定，尝试更换镜像或使用代理。${NC}"
         exit 1
     fi
     log "编译成功！二进制文件位于：$project_dir/clients/cli-miner/target/release/equium-miner"
@@ -248,6 +266,10 @@ main() {
             }
         fi
     done
+
+    # 1.5 修复 Cargo 镜像协议（关键修复）
+    print_header "检查 Cargo 源配置"
+    fix_cargo_registry_protocol
 
     # 2. 编译 Equium miner
     print_header "编译 Equium 挖矿程序"
