@@ -9,6 +9,7 @@ NC='\033[0m' # No Color
 
 LOG_FILE="$HOME/equium_miner.log"
 MAX_LOG_SIZE=10485760 # 10 MB
+CONFIG_FILE="$HOME/.equium_config"   # 记忆配置文件
 
 #======================== 日志与工具函数 ========================#
 log() {
@@ -157,8 +158,39 @@ build_equium() {
     log "编译成功！二进制文件位于：$project_dir/clients/cli-miner/target/release/equium-miner"
 }
 
-#======================== 用户交互配置 ========================#
+#======================== 配置记忆功能 ========================#
+load_config() {
+    if [[ -f "$CONFIG_FILE" ]]; then
+        source "$CONFIG_FILE"
+        log "已加载上次配置。"
+        return 0
+    else
+        return 1
+    fi
+}
+
+save_config() {
+    cat > "$CONFIG_FILE" <<EOF
+RPC_URL="$rpc_url"
+KEYPAIR_PATH="$KEYPAIR_PATH"
+EOF
+    log "配置已保存。"
+}
+
+#======================== 用户交互配置（带记忆） ========================#
 configure_rpc() {
+    local use_old="n"
+    if [[ -n "${RPC_URL}" ]]; then
+        echo -e "${BLUE}检测到上次使用的 RPC 地址：${GREEN}${RPC_URL}${NC}"
+        read -rp "是否更改？(y/n，默认 n): " use_old
+        use_old=${use_old:-n}
+        if [[ "$use_old" != "y" ]]; then
+            rpc_url="$RPC_URL"
+            log "沿用上次 RPC 地址。"
+            return 0
+        fi
+    fi
+
     echo -e "${BLUE}请输入 Solana RPC 端点 URL（建议使用 Helius 以获得稳定连接）${NC}"
     echo -e "如果你没有，可以输入 'default' 使用公共端点（仅适合测试）。"
     read -rp "RPC URL [default]: " rpc_url
@@ -175,7 +207,41 @@ configure_rpc() {
 }
 
 prepare_keypair() {
-    local keypair_path=""
+    local use_old="n"
+    # 如果从配置中读到了密钥路径，且文件存在，询问是否更改
+    if [[ -n "${KEYPAIR_PATH}" && -f "${KEYPAIR_PATH}" ]]; then
+        echo -e "${BLUE}检测到上次使用的钱包密钥文件：${GREEN}${KEYPAIR_PATH}${NC}"
+        read -rp "是否更改？(y/n，默认 n): " use_old
+        use_old=${use_old:-n}
+        if [[ "$use_old" != "y" ]]; then
+            keypair_path="$KEYPAIR_PATH"
+            log "沿用上次钱包密钥文件。"
+            # 提取公钥
+            local pubkey
+            pubkey=$(solana-keygen pubkey "$keypair_path" 2>/dev/null)
+            if [[ -z "$pubkey" ]]; then
+                log "${RED}无法从密钥文件读取公钥，文件可能损坏。请重新配置钱包。${NC}"
+                # 强制重新配置
+                prepare_new_keypair
+                return
+            fi
+            PUBKEY="$pubkey"
+            log "你的 Solana 地址（公钥）：$PUBKEY"
+            KEYPAIR_PATH="$keypair_path"
+            return 0
+        fi
+    fi
+
+    # 如果配置文件中的密钥文件不存在，也强制重新设置
+    if [[ -n "${KEYPAIR_PATH}" && ! -f "${KEYPAIR_PATH}" ]]; then
+        log "${RED}上次保存的密钥文件 ${KEYPAIR_PATH} 不存在，请重新配置钱包。${NC}"
+    fi
+
+    prepare_new_keypair
+}
+
+prepare_new_keypair() {
+    local keypair_input
     echo -e "${BLUE}你是否有现成的 Solana 密钥对文件（JSON 格式）？${NC}"
     echo -e "通常路径为：~/.config/solana/id.json"
     echo -e "如果是，请输入完整路径；如果否，直接按回车，我们将为你生成一个新钱包。"
@@ -287,7 +353,7 @@ main() {
     print_header "环境检测与安装"
     install_rust
     
-    # 确保 Rust 环境变量立即可用
+    # 确保 Rust 环境立即可用
     if [[ -f "$HOME/.cargo/env" ]]; then
         source "$HOME/.cargo/env"
     fi
@@ -311,12 +377,16 @@ main() {
     print_header "编译 Equium 挖矿程序"
     build_equium
 
-    # 4. 用户配置
+    # 4. 用户配置（带记忆）
     print_header "配置挖矿参数"
+    load_config  # 尝试加载历史配置
     configure_rpc
     prepare_keypair
     set_mining_params
     select_run_mode
+
+    # 保存配置（下次直接用）
+    save_config
 
     # 5. 显示摘要并确认
     echo -e "\n${YELLOW}===== 配置摘要 =====${NC}"
