@@ -110,13 +110,14 @@ install_solana_cli() {
     log "Solana CLI 安装完成。"
 }
 
-#======================== 项目编译 ========================#
+#======================== 项目编译（官方 workspace 方式） ========================#
 build_equium() {
     local project_dir="$HOME/equium"
+    local binary_path="$project_dir/target/release/equium-miner"
     
     # 如果目录已存在，但编译文件不存在，则清理后重新克隆
     if [[ -d "$project_dir" ]]; then
-        if [[ ! -f "$project_dir/clients/cli-miner/target/release/equium-miner" ]]; then
+        if [[ ! -f "$binary_path" ]]; then
             log "${YELLOW}检测到未成功的克隆记录，正在清理并重新克隆...${NC}"
             rm -rf "$project_dir"
         fi
@@ -135,8 +136,8 @@ build_equium() {
         git pull origin main 2>/dev/null || log "${YELLOW}更新失败，将使用现有代码。${NC}"
     fi
 
-    cd "$project_dir/clients/cli-miner" || { log "${RED}目录不存在，请检查仓库结构。${NC}"; exit 1; }
-    log "开始编译（可能需要几分钟）..."
+    cd "$project_dir" || { log "${RED}无法进入项目目录。${NC}"; exit 1; }
+    log "开始编译（官方 workspace 方式，可能需要几分钟）..."
     
     # 确保 Rust 环境在编译前绝对可用
     if [[ -f "$HOME/.cargo/env" ]]; then
@@ -145,16 +146,17 @@ build_equium() {
     export PATH="$HOME/.cargo/bin:$PATH"
     
     if ! command -v cargo &> /dev/null; then
-        log "${RED}严重错误：cargo 命令不可用。请尝试重启终端后手动运行：source ~/.cargo/env && cd ~/equium/clients/cli-miner && cargo build --release${NC}"
+        log "${RED}严重错误：cargo 命令不可用。请尝试重启终端后手动运行：source ~/.cargo/env && cd ~/equium && cargo build -p equium-cli-miner --release${NC}"
         exit 1
     fi
     
-    cargo build --release
+    # 使用官方推荐的 -p 指定包名编译
+    cargo build -p equium-cli-miner --release
     if [[ $? -ne 0 ]]; then
         log "${RED}编译失败！请检查上方错误信息。如果提示网络错误，可能是 Cargo 源不稳定，尝试更换镜像或使用代理。${NC}"
         exit 1
     fi
-    log "编译成功！二进制文件位于：$project_dir/clients/cli-miner/target/release/equium-miner"
+    log "编译成功！二进制文件位于：$binary_path"
 }
 
 #======================== 配置记忆功能 ========================#
@@ -190,7 +192,7 @@ configure_rpc() {
         fi
     fi
 
-    echo -e "${BLUE}请输入 Solana RPC 端点 URL（建议使用 Helius 以获得稳定连接）${NC}"
+    echo -e "${BLUE}请输入 Solana RPC 端点 URL（建议使用 Helius 获得稳定连接）${NC}"
     echo -e "如果你没有，可以输入 'default' 使用公共端点（仅适合测试）。"
     read -rp "RPC URL [default]: " rpc_url
     if [[ -z "$rpc_url" || "$rpc_url" == "default" ]]; then
@@ -256,7 +258,6 @@ guide_keypair_setup() {
         mkdir -p "$wallet_dir"
         keypair_path="$wallet_dir/id.json"
         if [[ -f "$keypair_path" ]]; then
-            # 既然用户选择了生成，但文件已存在，询问是否覆盖或直接使用
             echo -e "${YELLOW}文件 $keypair_path 已存在。${NC}"
             echo -e "  - 输入 y 覆盖并生成新钱包（旧钱包将被替换）"
             echo -e "  - 输入 n 或直接回车，使用现有文件"
@@ -289,7 +290,8 @@ guide_keypair_setup() {
         exit 1
     fi
     log "你的 Solana 地址（公钥）：$pubkey"
-    echo -e "${YELLOW}⚠️  警告：请确保该地址已转入至少 0.005 SOL 作为手续费！${NC}"
+    echo -e "${YELLOW}⚠️  警告：每次挖矿交易费用低于 0.001 SOL，建议转入 0.005 SOL 以确保稳定运行。${NC}"
+    echo -e "挖出的 EQM 会自动存入该钱包关联的 EQM 代币账户，无需额外操作。"
     echo -e "你可以使用任何 Solana 钱包向此地址转账。完成后按回车继续。"
     read -r
     KEYPAIR_PATH="$keypair_path"
@@ -326,7 +328,7 @@ select_run_mode() {
 
 #======================== 启动挖矿 ========================#
 start_mining() {
-    local project_dir="$HOME/equium/clients/cli-miner"
+    local project_dir="$HOME/equium"
     local cmd="$project_dir/target/release/equium-miner --rpc-url $rpc_url --keypair $KEYPAIR_PATH $MAX_BLOCKS"
     
     # 启动前最终检查
