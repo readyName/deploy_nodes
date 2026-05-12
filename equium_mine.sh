@@ -85,7 +85,6 @@ install_solana_cli() {
     fi
     log "正在安装 Solana CLI（需要生成钱包）..."
     
-    # 重试 3 次，应对间歇性网络问题
     for i in 1 2 3; do
         log "第 $i 次尝试下载 Solana CLI 安装脚本..."
         sh -c "$(curl -sSfL https://release.solana.com/stable/install)" && break
@@ -95,15 +94,12 @@ install_solana_cli() {
         else
             log "${RED}Solana CLI 安装脚本下载失败（网络错误）。${NC}"
             log "${YELLOW}建议手动安装：https://docs.solanalabs.com/cli/install${NC}"
-            log "${YELLOW}或者从 GitHub 直接下载二进制：https://github.com/solana-labs/solana/releases${NC}"
             exit 1
         fi
     done
 
-    # 确保 PATH 正确
     export PATH="$HOME/.local/share/solana/install/active_release/bin:$PATH"
     
-    # 最终验证
     if ! command -v solana-keygen &> /dev/null; then
         log "${RED}安装后仍找不到 solana-keygen，可能是 PATH 未生效。请打开新终端或手动执行 source ~/.profile。${NC}"
         exit 1
@@ -111,55 +107,24 @@ install_solana_cli() {
     log "Solana CLI 安装完成，版本：$(solana --version 2>/dev/null)"
 }
 
-#======================== 临时切换 Cargo 源（解决网络超时） ========================#
-setup_cargo_mirror() {
-    local cargo_home="${CARGO_HOME:-$HOME/.cargo}"
-    local config_file="$cargo_home/config.toml"
-    local backup_file="$cargo_home/config.toml.equium_backup"
-
-    log "为编译临时启用清华镜像源并延长超时..."
-
-    if [[ -f "$config_file" ]] && [[ ! -f "$backup_file" ]]; then
-        cp "$config_file" "$backup_file"
-    fi
-
-    mkdir -p "$cargo_home"
-    cat > "$config_file" <<'EOF'
-[source.crates-io]
-replace-with = 'tuna'
-
-[source.tuna]
-registry = "https://mirrors.tuna.tsinghua.edu.cn/git/crates.io-index.git"
-
-[net]
-retry = 5
-git-fetch-with-cli = true
-EOF
-
-    export CARGO_NET_TIMEOUT=120
-    export CARGO_HTTP_TIMEOUT=120
-}
-
-restore_cargo_mirror() {
-    local cargo_home="${CARGO_HOME:-$HOME/.cargo}"
-    local config_file="$cargo_home/config.toml"
-    local backup_file="$cargo_home/config.toml.equium_backup"
-
-    if [[ -f "$backup_file" ]]; then
-        mv "$backup_file" "$config_file"
-        log "已恢复原始 Cargo 配置。"
-    else
-        if [[ -f "$config_file" ]]; then
-            grep -q "replace-with = 'tuna'" "$config_file" && rm -f "$config_file"
+#======================== 修复历史遗留的 git:// 协议问题 ========================#
+fix_cargo_git_protocol() {
+    local cargo_config="$HOME/.cargo/config.toml"
+    if [[ -f "$cargo_config" ]]; then
+        if grep -q 'git://' "$cargo_config"; then
+            log "检测到 Cargo 配置中存在旧版 git:// 协议，自动修复为 https://..."
+            sed -i '' 's|git://|https://|g' "$cargo_config"
+            log "已修复 git:// 协议。"
         fi
     fi
 }
 
-#======================== 项目编译（官方 workspace 方式） ========================#
+#======================== 项目编译（直接用官方源，极速无排队） ========================#
 build_equium() {
     local project_dir="$HOME/equium"
     local binary_path="$project_dir/target/release/equium-miner"
     
+    # 如果目录已存在，但编译文件不存在，则清理后重新克隆
     if [[ -d "$project_dir" ]]; then
         if [[ ! -f "$binary_path" ]]; then
             log "${YELLOW}检测到未成功的克隆记录，正在清理并重新克隆...${NC}"
@@ -181,8 +146,9 @@ build_equium() {
     fi
 
     cd "$project_dir" || { log "${RED}无法进入项目目录。${NC}"; exit 1; }
-    log "开始编译（官方 workspace 方式，可能需要几分钟）..."
+    log "开始编译（预计 2-5 分钟，使用官方源，无排队）..."
     
+    # 确保 Rust 环境绝对可用
     if [[ -f "$HOME/.cargo/env" ]]; then
         source "$HOME/.cargo/env"
     fi
@@ -193,17 +159,16 @@ build_equium() {
         exit 1
     fi
 
-    setup_cargo_mirror
-    trap restore_cargo_mirror EXIT
+    # 网络优化：长超时 + 多次重试（不要镜像，直接官方源）
+    export CARGO_NET_TIMEOUT=180
+    export CARGO_HTTP_TIMEOUT=180
+    export CARGO_NET_RETRY=10
 
     cargo build -p equium-cli-miner --release
     if [[ $? -ne 0 ]]; then
-        log "${RED}编译失败！常见原因：网络不稳定、镜像失效。若反复失败，可尝试手动编译：source ~/.cargo/env && cd ~/equium && cargo build -p equium-cli-miner --release${NC}"
+        log "${RED}编译失败！若为网络超时，可尝试重跑脚本或手动运行：source ~/.cargo/env && cd ~/equium && cargo build -p equium-cli-miner --release${NC}"
         exit 1
     fi
-
-    restore_cargo_mirror
-    trap - EXIT
     log "编译成功！二进制文件位于：$binary_path"
 }
 
@@ -283,51 +248,22 @@ prepare_keypair() {
 }
 
 guide_keypair_setup() {
-    local keypair_input
-    echo -e "${BLUE}你是否有现成的 Solana 密钥对文件（JSON 格式）？${NC}"
-    echo -e "通常路径为：~/.config/solana/id.json"
-    echo -e "如果是，请输入完整路径；如果否，直接按回车，我们将为你生成一个新钱包。"
-    read -rp "密钥文件路径（留空生成新钱包）: " keypair_input
+    install_solana_cli  # 确保 solana-keygen 可用
+    
+    echo -e "${BLUE}请选择钱包设置方式：${NC}"
+    echo "  1) 生成新钱包"
+    echo "  2) 使用现有的密钥对文件（JSON）"
+    echo "  3) 导入私钥（Base58 格式）"
+    read -rp "请输入选项 (1/2/3) [1]: " wallet_choice
+    wallet_choice=${wallet_choice:-1}
 
-    if [[ -n "$keypair_input" ]]; then
-        keypair_path="${keypair_input/#\~/$HOME}"
-        if [[ ! -f "$keypair_path" ]]; then
-            log "${RED}文件 $keypair_path 不存在。请检查路径后重试。${NC}"
-            exit 1
-        fi
-        log "使用现有密钥文件：$keypair_path"
-    else
-        log "开始生成新 Solana 钱包..."
-        install_solana_cli
-        local wallet_dir="$HOME/.config/solana"
-        mkdir -p "$wallet_dir"
-        keypair_path="$wallet_dir/id.json"
-        if [[ -f "$keypair_path" ]]; then
-            echo -e "${YELLOW}文件 $keypair_path 已存在。${NC}"
-            echo -e "  - 输入 y 覆盖并生成新钱包（旧钱包将被替换）"
-            echo -e "  - 输入 n 或直接回车，使用现有文件"
-            read -rp "是否覆盖？(y/n，默认 n): " overwrite
-            overwrite=${overwrite:-n}
-            if [[ "$overwrite" =~ ^[Yy]$ ]]; then
-                solana-keygen new --outfile "$keypair_path" --no-bip39-passphrase
-                if [[ $? -ne 0 ]]; then
-                    log "${RED}钱包生成失败。${NC}"
-                    exit 1
-                fi
-                log "新钱包已生成。请务必保管好你的助记词！"
-            else
-                log "使用现有钱包文件。"
-            fi
-        else
-            solana-keygen new --outfile "$keypair_path" --no-bip39-passphrase
-            if [[ $? -ne 0 ]]; then
-                log "${RED}钱包生成失败。${NC}"
-                exit 1
-            fi
-            log "新钱包已生成。请务必保管好你的助记词！"
-        fi
-    fi
+    case "$wallet_choice" in
+        2) use_existing_keypair ;;
+        3) import_private_key ;;
+        *) generate_new_wallet ;;
+    esac
 
+    # 提取公钥并做最终检查
     local pubkey
     pubkey=$(solana-keygen pubkey "$keypair_path" 2>/dev/null)
     if [[ -z "$pubkey" ]]; then
@@ -341,6 +277,79 @@ guide_keypair_setup() {
     read -r
     KEYPAIR_PATH="$keypair_path"
     PUBKEY="$pubkey"
+}
+
+# 方式1：生成全新钱包
+generate_new_wallet() {
+    local wallet_dir="$HOME/.config/solana"
+    mkdir -p "$wallet_dir"
+    keypair_path="$wallet_dir/id.json"
+    if [[ -f "$keypair_path" ]]; then
+        echo -e "${YELLOW}文件 $keypair_path 已存在。${NC}"
+        echo -e "  - 输入 y 覆盖并生成新钱包（旧钱包将被替换）"
+        echo -e "  - 输入 n 或直接回车，使用现有文件"
+        read -rp "是否覆盖？(y/n，默认 n): " overwrite
+        overwrite=${overwrite:-n}
+        if [[ "$overwrite" =~ ^[Yy]$ ]]; then
+            solana-keygen new --outfile "$keypair_path" --no-bip39-passphrase
+            if [[ $? -ne 0 ]]; then
+                log "${RED}钱包生成失败。${NC}"
+                exit 1
+            fi
+            log "新钱包已生成。请务必保管好你的助记词！"
+        else
+            log "使用现有钱包文件。"
+        fi
+    else
+        solana-keygen new --outfile "$keypair_path" --no-bip39-passphrase
+        if [[ $? -ne 0 ]]; then
+            log "${RED}钱包生成失败。${NC}"
+            exit 1
+        fi
+        log "新钱包已生成。请务必保管好你的助记词！"
+    fi
+}
+
+# 方式2：使用现有密钥文件
+use_existing_keypair() {
+    local keypair_input
+    read -rp "请输入密钥文件完整路径: " keypair_input
+    keypair_path="${keypair_input/#\~/$HOME}"
+    if [[ ! -f "$keypair_path" ]]; then
+        log "${RED}文件 $keypair_path 不存在。请检查路径后重试。${NC}"
+        exit 1
+    fi
+    log "使用现有密钥文件：$keypair_path"
+}
+
+# 方式3：导入 Base58 私钥
+import_private_key() {
+    echo -e "${YELLOW}⚠️  私钥是敏感信息，请确保周围环境安全。${NC}"
+    read -rp "请粘贴 Base58 私钥: " private_key
+    if [[ -z "$private_key" ]]; then
+        log "${RED}私钥不能为空。${NC}"
+        exit 1
+    fi
+
+    local wallet_dir="$HOME/.config/solana"
+    mkdir -p "$wallet_dir"
+    keypair_path="$wallet_dir/id_imported.json"
+    
+    if [[ -f "$keypair_path" ]]; then
+        read -rp "文件 $keypair_path 已存在，是否覆盖？(y/n，默认 n): " overwrite
+        overwrite=${overwrite:-n}
+        if [[ ! "$overwrite" =~ ^[Yy]$ ]]; then
+            log "请备份旧文件后重试。"
+            exit 1
+        fi
+    fi
+
+    echo "$private_key" | solana-keygen recover -o "$keypair_path" --outfile "$keypair_path" prompt://?keypair_name=imported 2>/dev/null
+    if [[ $? -ne 0 ]]; then
+        log "${RED}私钥格式错误，或 solana-keygen 处理失败。请确认你输入的是合法的 Base58 私钥。${NC}"
+        exit 1
+    fi
+    log "私钥导入成功，密钥文件已保存至：$keypair_path"
 }
 
 set_mining_params() {
@@ -421,11 +430,15 @@ main() {
         fi
     done
 
-    # 2. 编译 Equium miner
+    # 2. 修复历史遗留的 git:// 协议
+    print_header "修复 Cargo 配置"
+    fix_cargo_git_protocol
+
+    # 3. 编译 Equium miner（官方源，极速）
     print_header "编译 Equium 挖矿程序"
     build_equium
 
-    # 3. 用户配置（带记忆）
+    # 4. 用户配置（带记忆）
     print_header "配置挖矿参数"
     load_config
     configure_rpc
@@ -435,7 +448,7 @@ main() {
 
     save_config
 
-    # 4. 显示摘要并确认
+    # 5. 显示摘要并确认
     echo -e "\n${YELLOW}===== 配置摘要 =====${NC}"
     echo -e "RPC 地址：${GREEN}$rpc_url${NC}"
     echo -e "钱包公钥：${GREEN}$PUBKEY${NC}"
@@ -444,7 +457,7 @@ main() {
     echo -e "运行模式：${GREEN}$RUN_MODE${NC}"
     read -rp "确认无误后按 Enter 开始挖矿，或按 Ctrl+C 退出..."
 
-    # 5. 启动挖矿
+    # 6. 启动挖矿
     print_header "启动挖矿"
     start_mining
 }
