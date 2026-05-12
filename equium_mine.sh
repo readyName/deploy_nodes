@@ -56,22 +56,6 @@ detect_os() {
     log "macOS 环境检测通过。"
 }
 
-#======================== 修复 Cargo 镜像协议 ========================#
-fix_cargo_registry_protocol() {
-    local cargo_config="$HOME/.cargo/config.toml"
-    if [[ -f "$cargo_config" ]]; then
-        if grep -q 'git://' "$cargo_config"; then
-            log "检测到 Cargo 配置中包含旧版 git:// 协议，正在自动替换为 https://..."
-            sed -i '' 's|git://|https://|g' "$cargo_config"
-            log "已将 git:// 替换为 https://。"
-        else
-            log "Cargo 配置未使用 git:// 协议，跳过修复。"
-        fi
-    else
-        log "未发现自定义 Cargo 配置文件，将使用默认源。"
-    fi
-}
-
 #======================== 依赖安装 ========================#
 install_rust() {
     if check_command rustc; then
@@ -84,7 +68,6 @@ install_rust() {
         exit 1
     fi
     
-    # 验证并加载 Rust 环境
     if [[ -f "$HOME/.cargo/env" ]]; then
         source "$HOME/.cargo/env"
     fi
@@ -101,13 +84,75 @@ install_solana_cli() {
         return 0
     fi
     log "正在安装 Solana CLI（需要生成钱包）..."
-    sh -c "$(curl -sSfL https://release.solana.com/stable/install)"
-    if [[ $? -ne 0 ]]; then
-        log "${RED}Solana CLI 安装失败。请手动安装：https://docs.solanalabs.com/cli/install${NC}"
+    
+    # 重试 3 次，应对间歇性网络问题
+    for i in 1 2 3; do
+        log "第 $i 次尝试下载 Solana CLI 安装脚本..."
+        sh -c "$(curl -sSfL https://release.solana.com/stable/install)" && break
+        if [[ $i -lt 3 ]]; then
+            log "下载失败，等待 5 秒后重试..."
+            sleep 5
+        else
+            log "${RED}Solana CLI 安装脚本下载失败（网络错误）。${NC}"
+            log "${YELLOW}建议手动安装：https://docs.solanalabs.com/cli/install${NC}"
+            log "${YELLOW}或者从 GitHub 直接下载二进制：https://github.com/solana-labs/solana/releases${NC}"
+            exit 1
+        fi
+    done
+
+    # 确保 PATH 正确
+    export PATH="$HOME/.local/share/solana/install/active_release/bin:$PATH"
+    
+    # 最终验证
+    if ! command -v solana-keygen &> /dev/null; then
+        log "${RED}安装后仍找不到 solana-keygen，可能是 PATH 未生效。请打开新终端或手动执行 source ~/.profile。${NC}"
         exit 1
     fi
-    export PATH="$HOME/.local/share/solana/install/active_release/bin:$PATH"
-    log "Solana CLI 安装完成。"
+    log "Solana CLI 安装完成，版本：$(solana --version 2>/dev/null)"
+}
+
+#======================== 临时切换 Cargo 源（解决网络超时） ========================#
+setup_cargo_mirror() {
+    local cargo_home="${CARGO_HOME:-$HOME/.cargo}"
+    local config_file="$cargo_home/config.toml"
+    local backup_file="$cargo_home/config.toml.equium_backup"
+
+    log "为编译临时启用清华镜像源并延长超时..."
+
+    if [[ -f "$config_file" ]] && [[ ! -f "$backup_file" ]]; then
+        cp "$config_file" "$backup_file"
+    fi
+
+    mkdir -p "$cargo_home"
+    cat > "$config_file" <<'EOF'
+[source.crates-io]
+replace-with = 'tuna'
+
+[source.tuna]
+registry = "https://mirrors.tuna.tsinghua.edu.cn/git/crates.io-index.git"
+
+[net]
+retry = 5
+git-fetch-with-cli = true
+EOF
+
+    export CARGO_NET_TIMEOUT=120
+    export CARGO_HTTP_TIMEOUT=120
+}
+
+restore_cargo_mirror() {
+    local cargo_home="${CARGO_HOME:-$HOME/.cargo}"
+    local config_file="$cargo_home/config.toml"
+    local backup_file="$cargo_home/config.toml.equium_backup"
+
+    if [[ -f "$backup_file" ]]; then
+        mv "$backup_file" "$config_file"
+        log "已恢复原始 Cargo 配置。"
+    else
+        if [[ -f "$config_file" ]]; then
+            grep -q "replace-with = 'tuna'" "$config_file" && rm -f "$config_file"
+        fi
+    fi
 }
 
 #======================== 项目编译（官方 workspace 方式） ========================#
@@ -115,7 +160,6 @@ build_equium() {
     local project_dir="$HOME/equium"
     local binary_path="$project_dir/target/release/equium-miner"
     
-    # 如果目录已存在，但编译文件不存在，则清理后重新克隆
     if [[ -d "$project_dir" ]]; then
         if [[ ! -f "$binary_path" ]]; then
             log "${YELLOW}检测到未成功的克隆记录，正在清理并重新克隆...${NC}"
@@ -139,7 +183,6 @@ build_equium() {
     cd "$project_dir" || { log "${RED}无法进入项目目录。${NC}"; exit 1; }
     log "开始编译（官方 workspace 方式，可能需要几分钟）..."
     
-    # 确保 Rust 环境在编译前绝对可用
     if [[ -f "$HOME/.cargo/env" ]]; then
         source "$HOME/.cargo/env"
     fi
@@ -149,13 +192,18 @@ build_equium() {
         log "${RED}严重错误：cargo 命令不可用。请尝试重启终端后手动运行：source ~/.cargo/env && cd ~/equium && cargo build -p equium-cli-miner --release${NC}"
         exit 1
     fi
-    
-    # 使用官方推荐的 -p 指定包名编译
+
+    setup_cargo_mirror
+    trap restore_cargo_mirror EXIT
+
     cargo build -p equium-cli-miner --release
     if [[ $? -ne 0 ]]; then
-        log "${RED}编译失败！请检查上方错误信息。如果提示网络错误，可能是 Cargo 源不稳定，尝试更换镜像或使用代理。${NC}"
+        log "${RED}编译失败！常见原因：网络不稳定、镜像失效。若反复失败，可尝试手动编译：source ~/.cargo/env && cd ~/equium && cargo build -p equium-cli-miner --release${NC}"
         exit 1
     fi
+
+    restore_cargo_mirror
+    trap - EXIT
     log "编译成功！二进制文件位于：$binary_path"
 }
 
@@ -208,7 +256,6 @@ configure_rpc() {
 }
 
 prepare_keypair() {
-    # 如果从记忆文件中读到了 KEYPAIR_PATH 且文件存在，则询问是否更改
     if [[ -n "${KEYPAIR_PATH}" && -f "${KEYPAIR_PATH}" ]]; then
         echo -e "${BLUE}检测到上次使用的钱包密钥文件：${GREEN}${KEYPAIR_PATH}${NC}"
         local pubkey
@@ -231,7 +278,6 @@ prepare_keypair() {
         log "${RED}上次保存的密钥文件 ${KEYPAIR_PATH} 不存在，请重新配置钱包。${NC}"
     fi
 
-    # 记忆文件不存在或密钥文件丢失 → 引导用户重新配置
     echo -e "${BLUE}未找到有效的记忆钱包，请配置 Solana 密钥对。${NC}"
     guide_keypair_setup
 }
@@ -251,7 +297,6 @@ guide_keypair_setup() {
         fi
         log "使用现有密钥文件：$keypair_path"
     else
-        # 生成新钱包
         log "开始生成新 Solana 钱包..."
         install_solana_cli
         local wallet_dir="$HOME/.config/solana"
@@ -331,7 +376,6 @@ start_mining() {
     local project_dir="$HOME/equium"
     local cmd="$project_dir/target/release/equium-miner --rpc-url $rpc_url --keypair $KEYPAIR_PATH $MAX_BLOCKS"
     
-    # 启动前最终检查
     if [[ ! -f "$project_dir/target/release/equium-miner" ]]; then
         log "${RED}找不到挖矿程序，编译可能失败。请重新运行脚本。${NC}"
         exit 1
@@ -362,7 +406,6 @@ main() {
     print_header "环境检测与安装"
     install_rust
     
-    # 确保 Rust 环境立即可用
     if [[ -f "$HOME/.cargo/env" ]]; then
         source "$HOME/.cargo/env"
     fi
@@ -378,26 +421,21 @@ main() {
         fi
     done
 
-    # 2. 修复 Cargo 镜像协议
-    print_header "检查 Cargo 源配置"
-    fix_cargo_registry_protocol
-
-    # 3. 编译 Equium miner
+    # 2. 编译 Equium miner
     print_header "编译 Equium 挖矿程序"
     build_equium
 
-    # 4. 用户配置（带记忆）
+    # 3. 用户配置（带记忆）
     print_header "配置挖矿参数"
-    load_config  # 尝试加载历史配置
+    load_config
     configure_rpc
     prepare_keypair
     set_mining_params
     select_run_mode
 
-    # 保存配置（下次直接用）
     save_config
 
-    # 5. 显示摘要并确认
+    # 4. 显示摘要并确认
     echo -e "\n${YELLOW}===== 配置摘要 =====${NC}"
     echo -e "RPC 地址：${GREEN}$rpc_url${NC}"
     echo -e "钱包公钥：${GREEN}$PUBKEY${NC}"
@@ -406,7 +444,7 @@ main() {
     echo -e "运行模式：${GREEN}$RUN_MODE${NC}"
     read -rp "确认无误后按 Enter 开始挖矿，或按 Ctrl+C 退出..."
 
-    # 6. 启动挖矿
+    # 5. 启动挖矿
     print_header "启动挖矿"
     start_mining
 }
