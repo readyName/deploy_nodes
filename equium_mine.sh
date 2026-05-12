@@ -83,25 +83,44 @@ install_solana_cli() {
     if check_command solana; then
         return 0
     fi
-    log "正在安装 Solana CLI（需要生成钱包）..."
+
+    # 自动检测代理设置
+    if [[ -n "$http_proxy" || -n "$https_proxy" ]]; then
+        log "${YELLOW}检测到系统代理设置，这可能干扰 Solana CLI 的安装。正在尝试清除...${NC}"
+        unset http_proxy https_proxy HTTP_PROXY HTTPS_PROXY
+    fi
+
+    log "正在安装 Solana CLI（优先使用 Homebrew，如失败将重试官方脚本）..."
     
-    for i in 1 2 3; do
-        log "第 $i 次尝试下载 Solana CLI 安装脚本..."
-        sh -c "$(curl -sSfL https://release.solana.com/stable/install)" && break
-        if [[ $i -lt 3 ]]; then
-            log "下载失败，等待 5 秒后重试..."
-            sleep 5
-        else
-            log "${RED}Solana CLI 安装脚本下载失败（网络错误）。${NC}"
-            log "${YELLOW}建议手动安装：https://docs.solanalabs.com/cli/install${NC}"
-            exit 1
-        fi
-    done
+    # 方法1：优先尝试 Homebrew（更稳妥）
+    if check_command brew; then
+        log "通过 Homebrew 安装 Solana CLI..."
+        brew update 2>/dev/null
+        brew install solana-cli 2>/dev/null
+    fi
+
+    # 方法2：Homebrew 失败则回退到官方脚本
+    if ! check_command solana; then
+        log "Homebrew 方式失败，回退到官方安装脚本..."
+        for i in 1 2 3; do
+            log "第 $i 次尝试下载 Solana CLI 安装脚本..."
+            sh -c "$(curl -sSfL https://release.anza.xyz/stable/install)" && break
+            if [[ $i -lt 3 ]]; then
+                log "${YELLOW}下载失败（可能网络问题），等待 5 秒后重试...${NC}"
+                sleep 5
+            else
+                log "${RED}Solana CLI 安装失败。请尝试手动安装，或检查网络/代理设置。${NC}"
+                log "手动安装指南: https://docs.anza.xyz/cli/install"
+                # 给出最终建议
+                exit 1
+            fi
+        done
+    fi
 
     export PATH="$HOME/.local/share/solana/install/active_release/bin:$PATH"
     
     if ! command -v solana-keygen &> /dev/null; then
-        log "${RED}安装后仍找不到 solana-keygen，可能是 PATH 未生效。请打开新终端或手动执行 source ~/.profile。${NC}"
+        log "${RED}安装后仍找不到 solana-keygen。请打开新终端或手动执行 source ~/.profile。${NC}"
         exit 1
     fi
     log "Solana CLI 安装完成，版本：$(solana --version 2>/dev/null)"
