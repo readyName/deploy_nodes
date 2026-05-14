@@ -1,8 +1,8 @@
 #!/bin/bash
 
 # =============================================
-#  Dria Node 一键安装、配置与启动脚本 (视觉增强版)
-#  适用于 macOS Apple Silicon
+#  Dria Node 一键安装、配置与启动脚本（简洁版）
+#  双击桌面启动文件即可看到实时日志
 # =============================================
 
 set -e
@@ -13,11 +13,8 @@ GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
 CYAN='\033[0;36m'
-MAGENTA='\033[0;35m'
-WHITE='\033[1;37m'
 NC='\033[0m'
 
-# 密钥和模型文件路径
 KEY_FILE="$HOME/.dria/wallet.key"
 MODEL_FILE="$HOME/.dria/current_model"
 
@@ -109,71 +106,31 @@ else
 fi
 
 # ------------------------------------------------------------
-# 5. 生成炫酷的桌面启动脚本
+# 5. 生成简洁的桌面启动脚本（直接运行，无 tmux）
 # ------------------------------------------------------------
 echo ""
-echo -e "${BLUE}📝 正在创建炫酷的桌面启动文件...${NC}"
+echo -e "${BLUE}📝 正在创建桌面启动文件...${NC}"
 
 cat > "$HOME/Desktop/dria_start.command" <<'DESKTOPEOF'
 #!/bin/bash
 
 # ╔══════════════════════════════════════════╗
-# ║     Dria Node 可视化监控启动器          ║
+# ║     Dria Node 一键启动脚本              ║
+# ║     关闭此窗口即可停止节点              ║
 # ╚══════════════════════════════════════════╝
-
-# 颜色定义
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-BLUE='\033[0;34m'
-CYAN='\033[0;36m'
-MAGENTA='\033[0;35m'
-WHITE='\033[1;37m'
-BOLD='\033[1m'
-NC='\033[0m'
 
 KEY_FILE="$HOME/.dria/wallet.key"
 MODEL_FILE="$HOME/.dria/current_model"
 
-# 清理屏幕
-clear
-
-# 显示炫酷标题
-echo -e "${MAGENTA}"
-echo "╔══════════════════════════════════════════════════════════╗"
-echo "║                                                          ║"
-echo "║     ██████╗ ██████╗ ██╗ █████╗                           ║"
-echo "║     ██╔══██╗██╔══██╗██║██╔══██╗   Dria Compute Node      ║"
-echo "║     ██║  ██║██████╔╝██║███████║                          ║"
-echo "║     ██║  ██║██╔══██╗██║██╔══██║   ⚡ Edge AI Network      ║"
-echo "║     ██████╔╝██║  ██║██║██║  ██║                          ║"
-echo "║     ╚═════╝ ╚═╝  ╚═╝╚═╝╚═╝  ╚═╝                          ║"
-echo "║                                                          ║"
-echo "╚══════════════════════════════════════════════════════════╝"
-echo -e "${NC}"
-sleep 1
-
-# 检查 tmux
-if ! command -v tmux &> /dev/null; then
-    echo -e "${RED}❌ 需要 tmux 才能使用可视化监控，正在尝试安装...${NC}"
-    if command -v brew &> /dev/null; then
-        brew install tmux
-    else
-        echo -e "${RED}未找到 Homebrew，请手动安装 tmux 后重试${NC}"
-        read -p "按任意键退出..."
-        exit 1
-    fi
-fi
-
 # 检查必要文件
 if [ ! -f "$KEY_FILE" ]; then
-    echo -e "${RED}❌ 未找到私钥文件，请先运行安装脚本${NC}"
+    echo "❌ 未找到私钥文件，请先运行安装脚本"
     read -p "按任意键退出..."
     exit 1
 fi
 
 if [ ! -f "$MODEL_FILE" ]; then
-    echo -e "${YELLOW}⚠️  未找到模型记录，请输入要运行的模型名称：${NC}"
+    echo "⚠️  未找到模型记录，请输入要运行的模型名称："
     read MODEL_NAME
     echo "$MODEL_NAME" > "$MODEL_FILE"
 else
@@ -185,7 +142,7 @@ if ! command -v dria-node &> /dev/null; then
     if [ -f "$HOME/.dria/bin/dria-node" ]; then
         export PATH="$HOME/.dria/bin:$PATH"
     else
-        echo -e "${RED}❌ 找不到 dria-node，请确认安装完成${NC}"
+        echo "❌ 找不到 dria-node，请确认安装完成"
         read -p "按任意键退出..."
         exit 1
     fi
@@ -193,60 +150,16 @@ fi
 
 WALLET_KEY=$(cat "$KEY_FILE")
 
-# 结束旧会话
-tmux kill-session -t dria 2>/dev/null || true
+echo "🚀 正在启动 Dria 节点（模型：$MODEL_NAME）..."
+echo "📡 日志将实时显示在此窗口，按 Ctrl+C 可停止节点"
+echo "----------------------------------------"
 
-# 创建新的 tmux 会话，并运行定制的监控界面
-tmux new -s dria -d bash -c "
-    # 在 tmux 内部再次设置颜色
-    RED='\033[0;31m'
-    GREEN='\033[0;32m'
-    YELLOW='\033[1;33m'
-    BLUE='\033[0;34m'
-    CYAN='\033[0;36m'
-    MAGENTA='\033[0;35m'
-    WHITE='\033[1;37m'
-    NC='\033[0m'
-    
-    # 清屏
-    clear
-    
-    # 显示启动横幅
-    echo -e \"\${MAGENTA}╔══════════════════════════════════════════════════════════╗\"
-    echo -e \"║  Dria Node 正在启动...                                  ║\"
-    echo -e \"║  模型: $MODEL_NAME                                      ║\"
-    echo -e \"║  时间: \$(date '+%Y-%m-%d %H:%M:%S')                      ║\"
-    echo -e \"╚══════════════════════════════════════════════════════════╝\${NC}\"
-    echo \"\"
-    
-    # 启动节点，并将输出加上时间戳和颜色
-    dria-node start --wallet $WALLET_KEY --model $MODEL_NAME 2>&1 | while IFS= read -r line; do
-        # 获取当前时间戳
-        timestamp=\$(date '+%H:%M:%S')
-        
-        # 根据日志级别添加颜色
-        if echo \"\$line\" | grep -q 'ERROR'; then
-            echo -e \"\${RED}[\$timestamp]\${NC} \$line\"
-        elif echo \"\$line\" | grep -q 'WARN'; then
-            echo -e \"\${YELLOW}[\$timestamp]\${NC} \$line\"
-        elif echo \"\$line\" | grep -q 'INFO'; then
-            echo -e \"\${GREEN}[\$timestamp]\${NC} \$line\"
-        elif echo \"\$line\" | grep -q 'DEBUG'; then
-            echo -e \"\${CYAN}[\$timestamp]\${NC} \$line\"
-        else
-            echo -e \"\${WHITE}[\$timestamp]\${NC} \$line\"
-        fi
-    done
-"
-
-# 自动连接至 tmux 会话，展示日志
-echo -e "${GREEN}正在连接实时监控界面...${NC}"
-sleep 1
-tmux attach -t dria
+# 直接启动节点，日志输出到当前终端
+dria-node start --wallet "$WALLET_KEY" --model "$MODEL_NAME"
 DESKTOPEOF
 
 chmod +x "$HOME/Desktop/dria_start.command"
-echo -e "${GREEN}✅ 炫酷桌面启动文件已创建：~/Desktop/dria_start.command${NC}"
+echo -e "${GREEN}✅ 桌面启动文件已创建：~/Desktop/dria_start.command${NC}"
 
 # ------------------------------------------------------------
 # 6. 完成提示
@@ -257,10 +170,8 @@ echo -e "${GREEN}  🎉 Dria 节点安装完成！${NC}"
 echo -e "${GREEN}══════════════════════════════════════════════${NC}"
 echo ""
 echo -e "  🖥️  启动节点：双击桌面的 ${CYAN}dria_start.command${NC}"
-echo -e "      (将自动显示彩色实时监控界面)"
+echo -e "      (日志会直接显示在当前终端窗口)"
 echo -e "  📊 查看收益：${CYAN}https://dria.co/edge-ai${NC}"
 echo -e "  🔐 私钥文件：${CYAN}$KEY_FILE${NC}"
 echo -e "     ${YELLOW}请勿分享此文件！${NC}"
-echo ""
-echo -e "${YELLOW}  提示：在监控界面中，按 Ctrl+B 然后按 D 可以隐藏在后台运行。${NC}"
 echo ""
