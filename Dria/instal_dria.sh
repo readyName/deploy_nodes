@@ -1,8 +1,8 @@
 #!/bin/bash
 
 # =============================================
-#  Dria Node 一键安装、配置与启动脚本（简洁版）
-#  双击桌面启动文件即可看到实时日志
+#  Dria Node 一键安装、配置与启动脚本（智能版）
+#  自动检查并创建 /usr/local/bin，全程交互
 # =============================================
 
 set -e
@@ -17,6 +17,17 @@ NC='\033[0m'
 
 KEY_FILE="$HOME/.dria/wallet.key"
 MODEL_FILE="$HOME/.dria/current_model"
+
+# ------------------------------------------------------------
+# 0. 检查并创建 /usr/local/bin
+# ------------------------------------------------------------
+if [ ! -d "/usr/local/bin" ]; then
+    echo -e "${YELLOW}⚠️  目录 /usr/local/bin 不存在，正在创建...${NC}"
+    sudo mkdir -p /usr/local/bin
+    echo -e "${GREEN}✅ 目录已创建${NC}"
+else
+    echo -e "${GREEN}✅ /usr/local/bin 目录已存在，无需创建${NC}"
+fi
 
 # ------------------------------------------------------------
 # 1. 清理旧版本
@@ -37,6 +48,7 @@ if command -v dria-node &> /dev/null; then
 else
     echo -e "${BLUE}📥 正在安装 dria-node ...${NC}"
     curl -fsSL https://raw.githubusercontent.com/firstbatchxyz/dkn-compute-node/master/install.sh | bash
+    # 确保 PATH 包含安装路径
     export PATH="$HOME/.dria/bin:$PATH"
     echo -e "${GREEN}✅ dria-node 安装完成${NC}"
 fi
@@ -91,6 +103,7 @@ fi
 if [ ! -f "$KEY_FILE" ]; then
     read -sp "请输入你的钱包私钥 (输入不会显示): " WALLET_KEY
     echo ""
+    # 去掉可选的 0x 前缀，并验证长度
     clean_key=$(echo "$WALLET_KEY" | sed 's/^0x//')
     if [[ ! "$clean_key" =~ ^[a-fA-F0-9]{64}$ ]]; then
         echo -e "${RED}❌ 私钥格式不正确！必须是 64 位十六进制字符串${NC}"
@@ -114,15 +127,12 @@ echo -e "${BLUE}📝 正在创建桌面启动文件...${NC}"
 cat > "$HOME/Desktop/dria_start.command" <<'DESKTOPEOF'
 #!/bin/bash
 
-# ╔══════════════════════════════════════════╗
-# ║     Dria Node 一键启动脚本              ║
-# ║     关闭此窗口即可停止节点              ║
-# ╚══════════════════════════════════════════╝
+# Dria Node 一键启动
+# 关闭此窗口即可停止节点
 
 KEY_FILE="$HOME/.dria/wallet.key"
 MODEL_FILE="$HOME/.dria/current_model"
 
-# 检查必要文件
 if [ ! -f "$KEY_FILE" ]; then
     echo "❌ 未找到私钥文件，请先运行安装脚本"
     read -p "按任意键退出..."
@@ -154,7 +164,6 @@ echo "🚀 正在启动 Dria 节点（模型：$MODEL_NAME）..."
 echo "📡 日志将实时显示在此窗口，按 Ctrl+C 可停止节点"
 echo "----------------------------------------"
 
-# 直接启动节点，日志输出到当前终端
 dria-node start --wallet "$WALLET_KEY" --model "$MODEL_NAME"
 DESKTOPEOF
 
@@ -170,8 +179,7 @@ echo -e "${GREEN}  🎉 Dria 节点安装完成！${NC}"
 echo -e "${GREEN}══════════════════════════════════════════════${NC}"
 echo ""
 echo -e "  🖥️  启动节点：双击桌面的 ${CYAN}dria_start.command${NC}"
-echo -e "      (日志会直接显示在当前终端窗口)"
+echo -e "      (日志会直接显示在当前终端窗口，关闭窗口则停止节点)"
 echo -e "  📊 查看收益：${CYAN}https://dria.co/edge-ai${NC}"
-echo -e "  🔐 私钥文件：${CYAN}$KEY_FILE${NC}"
-echo -e "     ${YELLOW}请勿分享此文件！${NC}"
+echo -e "  🔐 私钥文件：${CYAN}$KEY_FILE${NC} (请勿分享)"
 echo ""
